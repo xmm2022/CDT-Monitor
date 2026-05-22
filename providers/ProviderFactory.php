@@ -4,6 +4,7 @@ require_once __DIR__ . '/AliyunProvider.php';
 require_once __DIR__ . '/HuaweiCloudProvider.php';
 require_once __DIR__ . '/TencentCloudProvider.php';
 require_once __DIR__ . '/AwsProvider.php';
+require_once __DIR__ . '/GcpProvider.php';
 
 class ProviderFactory
 {
@@ -22,6 +23,9 @@ class ProviderFactory
 
         $awsProvider = new AwsProvider();
         $this->providers[$awsProvider->getProviderKey()] = $awsProvider;
+
+        $gcpProvider = new GcpProvider();
+        $this->providers[$gcpProvider->getProviderKey()] = $gcpProvider;
     }
 
     public function getProvider(string $providerKey): CloudProviderInterface
