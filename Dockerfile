@@ -10,6 +10,15 @@ COPY composer.json composer.lock ./
 # 安装依赖 (排除开发依赖，优化自动加载)
 RUN composer install --no-dev --optimize-autoloader --ignore-platform-reqs --no-interaction --no-scripts
 
+# 裁剪华为云 SDK：仅保留实际使用的服务模块 (Ces/Ecs/Eip/Vpc)，
+# 其他 ~97 个服务目录占 ~350MB 全部移除。
+RUN find vendor/huaweicloud/huaweicloud-sdk-php/Services -mindepth 1 -maxdepth 1 -type d \
+        ! -name Ces ! -name Ecs ! -name Eip ! -name Vpc \
+        -exec rm -rf {} + \
+    && rm -rf vendor/huaweicloud/huaweicloud-sdk-php/CHANGELOG*.md \
+              vendor/huaweicloud/huaweicloud-sdk-php/README*.md \
+              vendor/huaweicloud/huaweicloud-sdk-php/OpenSourceSoftwareNotice.md
+
 # 复制其余项目文件
 COPY . .
 
