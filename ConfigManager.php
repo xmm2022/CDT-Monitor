@@ -5,6 +5,7 @@ class ConfigManager
     private $db;
     private $configCache = [];
     private $accountsCache = [];
+    private $lastError = '';
 
     public function __construct(Database $db)
     {
@@ -52,6 +53,11 @@ class ConfigManager
         return !empty($this->configCache['admin_password']);
     }
 
+    public function getLastError()
+    {
+        return $this->lastError;
+    }
+
     private function saveSetting($key, $value)
     {
         $stmt = $this->db->prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)");
@@ -75,6 +81,8 @@ class ConfigManager
 
     public function updateConfig($data)
     {
+        $this->lastError = '';
+
         try {
             $this->db->beginTransaction();
 
@@ -126,43 +134,58 @@ class ConfigManager
 
             // 2. 账号增量同步
             $newAccounts = $data['Accounts'] ?? [];
-            $stmt = $this->db->query("SELECT id, access_key_id, region_id, instance_id FROM accounts");
+            $stmt = $this->db->query("SELECT id, cloud_provider, access_key_id, region_id, instance_id, security_group_id FROM accounts");
             $existingMap = [];
             while ($row = $stmt->fetch()) {
-                // Use composite key for deduplication: AK + Region + InstanceID
-                $compositeKey = $row['access_key_id'] . '|' . $row['region_id'] . '|' . ($row['instance_id'] ?? '');
+                // Use composite key for deduplication: Provider + AK + Region + InstanceID
+                $compositeKey = ($row['cloud_provider'] ?? 'aliyun') . '|' . $row['access_key_id'] . '|' . $row['region_id'] . '|' . ($row['instance_id'] ?? '') . '|' . ($row['security_group_id'] ?? '');
                 $existingMap[$compositeKey] = $row['id'];
             }
 
             $keptIds = [];
-            $insertStmt = $this->db->prepare("INSERT INTO accounts (access_key_id, access_key_secret, region_id, instance_id, max_traffic, schedule_enabled, start_time, stop_time, remark, site_type, traffic_used, instance_status, updated_at, last_keep_alive_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'Unknown', 0, 0)");
-            $updateStmt = $this->db->prepare("UPDATE accounts SET access_key_secret = ?, region_id = ?, instance_id = ?, max_traffic = ?, schedule_enabled = ?, start_time = ?, stop_time = ?, remark = ?, site_type = ? WHERE id = ?");
+            $insertStmt = $this->db->prepare("INSERT INTO accounts (cloud_provider, access_key_id, access_key_secret, region_id, instance_id, project_id, security_group_id, max_traffic, schedule_enabled, start_time, stop_time, remark, site_type, api_proxy_enabled, api_proxy_host, api_proxy_port, api_proxy_user, api_proxy_pass, traffic_used, instance_status, updated_at, last_keep_alive_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'Unknown', 0, 0)");
+            $updateStmt = $this->db->prepare("UPDATE accounts SET cloud_provider = ?, access_key_secret = ?, region_id = ?, instance_id = ?, project_id = ?, security_group_id = ?, max_traffic = ?, schedule_enabled = ?, start_time = ?, stop_time = ?, remark = ?, site_type = ?, api_proxy_enabled = ?, api_proxy_host = ?, api_proxy_port = ?, api_proxy_user = ?, api_proxy_pass = ? WHERE id = ?");
 
             foreach ($newAccounts as $acc) {
+                $provider = $acc['cloudProvider'] ?? 'aliyun';
                 $key = $acc['AccessKeyId'];
+                $secret = $acc['AccessKeySecret'] ?? '';
                 $region = $acc['regionId'];
-                $instance = $acc['instanceId'] ?? '';
-                $compositeKey = $key . '|' . $region . '|' . $instance;
+                $instance = trim((string) ($acc['instanceId'] ?? ''));
+                $projectId = trim((string) ($acc['projectId'] ?? ''));
+                $securityGroupId = trim((string) ($acc['securityGroupId'] ?? ''));
+
+                $this->validateAccountPayload($provider, $key, $secret, $region, $projectId, $instance);
+
+                $compositeKey = $provider . '|' . $key . '|' . $region . '|' . $instance . '|' . $securityGroupId;
 
                 $params = [
-                    $acc['AccessKeySecret'],
+                    $secret,
                     $region,
                     $instance,
+                    $projectId,
+                    $securityGroupId,
                     $acc['maxTraffic'],
                     ($acc['schedule']['enabled'] ?? false) ? 1 : 0,
                     $acc['schedule']['startTime'] ?? '',
                     $acc['schedule']['stopTime'] ?? '',
                     $acc['remark'] ?? '',
-                    $acc['siteType'] ?? 'china'
+                    $acc['siteType'] ?? 'china',
+                    (isset($acc['apiProxy']['enabled']) && $acc['apiProxy']['enabled']) ? 1 : 0,
+                    trim((string) ($acc['apiProxy']['host'] ?? '')),
+                    trim((string) ($acc['apiProxy']['port'] ?? '')),
+                    trim((string) ($acc['apiProxy']['username'] ?? '')),
+                    (string) ($acc['apiProxy']['password'] ?? '')
                 ];
 
                 if (isset($existingMap[$compositeKey])) {
+                    array_unshift($params, $provider);
                     $id = $existingMap[$compositeKey];
                     $params[] = $id;
                     $updateStmt->execute($params);
                     $keptIds[] = $id;
                 } else {
-                    $insertParams = [$key];
+                    $insertParams = [$provider, $key];
                     array_push($insertParams, ...$params);
                     $insertStmt->execute($insertParams);
                     // For new inserts, we need to track the ID to avoid deleting it if user sends duplicate valid entries in one request? 
@@ -191,9 +214,25 @@ class ConfigManager
             $this->load();
             return true;
         } catch (Exception $e) {
+            $this->lastError = $e->getMessage();
             if ($this->db->inTransaction())
                 $this->db->rollBack();
             return false;
+        }
+    }
+
+    private function validateAccountPayload($provider, $key, $secret, $region, $projectId, $instance)
+    {
+        if (trim((string) $key) === '' || trim((string) $secret) === '' || trim((string) $region) === '') {
+            throw new Exception('账号缺少 AccessKey 或 Region ID');
+        }
+
+        if ($provider !== 'huaweicloud') {
+            return;
+        }
+
+        if ($projectId === '' || $instance === '') {
+            throw new Exception('华为云账号必须填写 Project ID 和 Instance ID');
         }
     }
 
@@ -208,22 +247,30 @@ class ConfigManager
                 $this->db->exec("DELETE FROM accounts");
                 $this->db->exec("DELETE FROM sqlite_sequence WHERE name='accounts'");
 
-                $insertStmt = $this->db->prepare("INSERT INTO accounts (id, access_key_id, access_key_secret, region_id, instance_id, max_traffic, schedule_enabled, start_time, stop_time, remark, site_type, traffic_used, instance_status, updated_at, last_keep_alive_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                $insertStmt = $this->db->prepare("INSERT INTO accounts (id, cloud_provider, access_key_id, access_key_secret, region_id, instance_id, project_id, security_group_id, max_traffic, schedule_enabled, start_time, stop_time, remark, site_type, api_proxy_enabled, api_proxy_host, api_proxy_port, api_proxy_user, api_proxy_pass, traffic_used, instance_status, updated_at, last_keep_alive_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
 
                 $newId = 1;
                 foreach ($rows as $row) {
                     $insertStmt->execute([
                         $newId++,
+                        $row['cloud_provider'] ?? 'aliyun',
                         $row['access_key_id'],
                         $row['access_key_secret'],
                         $row['region_id'],
                         $row['instance_id'],
+                        $row['project_id'] ?? '',
+                        $row['security_group_id'] ?? '',
                         $row['max_traffic'],
                         $row['schedule_enabled'],
                         $row['start_time'],
                         $row['stop_time'],
                         $row['remark'] ?? '',
                         $row['site_type'] ?? 'china',
+                        $row['api_proxy_enabled'] ?? 0,
+                        $row['api_proxy_host'] ?? '',
+                        $row['api_proxy_port'] ?? '',
+                        $row['api_proxy_user'] ?? '',
+                        $row['api_proxy_pass'] ?? '',
                         $row['traffic_used'],
                         $row['instance_status'],
                         $row['updated_at'],

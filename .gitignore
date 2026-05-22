@@ -15,3 +15,7 @@ Thumbs.db
 package.json
 package-lock.json
 static/tailwindcss-browser.js
+/data/data.sqlite
+/data/*.sqlite-journal
+/data/*.sqlite-wal
+/data/*.sqlite-shm

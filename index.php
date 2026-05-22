@@ -41,7 +41,7 @@ if ($action === 'setup') {
             $_SESSION['is_admin'] = true;
             echo json_encode(['success' => true]);
         } else {
-            echo json_encode(['success' => false, 'message' => 'Setup failed']);
+            echo json_encode(['success' => false, 'message' => $app->getLastConfigError() ?: 'Setup failed']);
         }
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -113,6 +113,29 @@ if ($action === 'control_instance') {
     exit;
 }
 
+if ($action === 'get_security_groups') {
+    header('Content-Type: application/json; charset=utf-8');
+    $id = (int) ($_GET['id'] ?? 0);
+    echo json_encode($app->getSecurityGroupRules($id));
+    exit;
+}
+
+if ($action === 'add_security_group_rule') {
+    header('Content-Type: application/json; charset=utf-8');
+    $data = json_decode(file_get_contents('php://input'), true);
+    $id = (int) ($data['id'] ?? 0);
+    echo json_encode($app->addSecurityGroupRule($id, $data));
+    exit;
+}
+
+if ($action === 'delete_security_group_rule') {
+    header('Content-Type: application/json; charset=utf-8');
+    $data = json_decode(file_get_contents('php://input'), true);
+    $id = (int) ($data['id'] ?? 0);
+    echo json_encode($app->deleteSecurityGroupRule($id, $data));
+    exit;
+}
+
 if ($action === 'get_config') {
     echo json_encode($app->getConfigForFrontend());
     exit;
@@ -123,7 +146,7 @@ if ($action === 'save_config') {
     if ($app->updateConfig($data)) {
         echo json_encode(['success' => true]);
     } else {
-        echo json_encode(['success' => false, 'message' => '保存失败']);
+        echo json_encode(['success' => false, 'message' => $app->getLastConfigError() ?: '保存失败']);
     }
     exit;
 }

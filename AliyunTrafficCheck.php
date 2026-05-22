@@ -5,15 +5,17 @@ require_once 'Database.php';
 require_once 'ConfigManager.php';
 require_once 'AliyunService.php';
 require_once 'NotificationService.php';
+require_once __DIR__ . '/providers/ProviderFactory.php';
 
 use AlibabaCloud\Client\Exception\ClientException;
 use AlibabaCloud\Client\Exception\ServerException;
+use HuaweiCloud\SDK\Core\Exceptions\ClientRequestException as HuaweiClientRequestException;
 
 class AliyunTrafficCheck
 {
     private $db;
     private $configManager;
-    private $aliyunService;
+    private $providerFactory;
     private $notificationService;
     private $initError = null;
 
@@ -24,7 +26,7 @@ class AliyunTrafficCheck
         try {
             $this->db = new Database();
             $this->configManager = new ConfigManager($this->db);
-            $this->aliyunService = new AliyunService();
+            $this->providerFactory = new ProviderFactory(new AliyunService());
             $this->notificationService = new NotificationService();
 
             // 注入配置到通知服务
@@ -98,6 +100,11 @@ class AliyunTrafficCheck
         return $success;
     }
 
+    public function getLastConfigError()
+    {
+        return $this->configManager ? $this->configManager->getLastError() : '';
+    }
+
     public function getConfigForFrontend()
     {
         if ($this->initError)
@@ -147,11 +154,16 @@ class AliyunTrafficCheck
         ];
 
         foreach ($accounts as $row) {
-            $config['Accounts'][] = [
+            $provider = $this->getProviderForAccount($row);
+            $accountConfig = [
+                'cloudProvider' => $row['cloud_provider'] ?? 'aliyun',
+                'capabilities' => $provider->getCapabilities($row),
                 'AccessKeyId' => $row['access_key_id'],
                 'AccessKeySecret' => $row['access_key_secret'],
                 'regionId' => $row['region_id'],
                 'instanceId' => $row['instance_id'],
+                'projectId' => $row['project_id'] ?? '',
+                'securityGroupId' => $row['security_group_id'] ?? '',
                 'maxTraffic' => (float) $row['max_traffic'],
                 'schedule' => [
                     'enabled' => $row['schedule_enabled'] == 1,
@@ -159,8 +171,26 @@ class AliyunTrafficCheck
                     'stopTime' => $row['stop_time']
                 ],
                 'remark' => $row['remark'] ?? '',
-                'siteType' => $row['site_type'] ?? 'china'
+                'siteType' => $row['site_type'] ?? 'china',
+                'apiProxy' => [
+                    'enabled' => ($row['api_proxy_enabled'] ?? 0) == 1,
+                    'host' => $row['api_proxy_host'] ?? '',
+                    'port' => $row['api_proxy_port'] ?? '',
+                    'username' => $row['api_proxy_user'] ?? '',
+                    'password' => $row['api_proxy_pass'] ?? ''
+                ]
             ];
+
+            if ($this->providerSupportsInstanceContext($provider, $row) && empty($row['instance_id'])) {
+                $context = $this->safeDescribeAccountContext($provider, $row);
+                if (!empty($context['instanceId'])) {
+                    $accountConfig['suggestedInstanceId'] = $context['instanceId'];
+                    $accountConfig['suggestedInstanceName'] = $context['instanceName'] ?? '';
+                    $accountConfig['suggestedPublicIp'] = $context['publicIp'] ?? '';
+                }
+            }
+
+            $config['Accounts'][] = $accountConfig;
         }
 
         return $config;
@@ -282,13 +312,21 @@ class AliyunTrafficCheck
         $accounts = $this->configManager->getAccounts();
 
         foreach ($accounts as $account) {
+            $provider = $this->getProviderForAccount($account);
+            $capabilities = $provider->getCapabilities($account);
+            $context = $this->providerSupportsInstanceContext($provider, $account)
+                ? $this->safeDescribeAccountContext($provider, $account)
+                : null;
+            $canTrafficMonitor = !empty($capabilities['traffic_monitor']) && ($context === null || !empty($context['trafficDataAvailable']));
+            $canInstanceControl = !empty($capabilities['instance_start_stop']);
+            $canScheduleManage = !empty($capabilities['schedule_manage']) && $canInstanceControl;
             $logPrefix = "[{$account['access_key_id']}]";
             $actions = [];
             $forceRefresh = false;
             $statusTransformed = false;
 
             // 1. 定时任务
-            if ($account['schedule_enabled'] == 1) {
+            if ($canScheduleManage && $account['schedule_enabled'] == 1) {
                 if ($account['start_time'] && $currentUserTime === $account['start_time']) {
                     if ($this->safeControlInstance($account, 'start')) {
                         $actions[] = "定时启动";
@@ -329,31 +367,41 @@ class AliyunTrafficCheck
 
             $newUpdateTime = $currentTime;
 
-            if ($shouldCheckApi) {
-                $newTraffic = $this->safeGetTraffic($account);
-                $status = $this->safeGetInstanceStatus($account);
+            if (!$canTrafficMonitor && !$canInstanceControl) {
+                $traffic = $account['traffic_used'];
+                $status = $account['instance_status'] ?: 'Unknown';
+                $apiStatusLog = "能力未启用";
+            } elseif ($shouldCheckApi) {
+                $newTraffic = $canTrafficMonitor
+                    ? ($context !== null ? (float) ($context['trafficUsedGb'] ?? 0) : $this->safeGetTraffic($account))
+                    : $account['traffic_used'];
+                $status = $canInstanceControl
+                    ? ($context !== null ? ($context['instanceStatus'] ?? 'Unknown') : $this->safeGetInstanceStatus($account))
+                    : ($account['instance_status'] ?: 'Unknown');
 
-                if ($status === 'Unknown') {
+                if ($canInstanceControl && $status === 'Unknown') {
                     usleep(500000);
                     $status = $this->safeGetInstanceStatus($account);
                 }
 
-                if ($newTraffic < 0) {
+                if ($canTrafficMonitor && $newTraffic < 0) {
                     $traffic = $account['traffic_used'];
                     $apiStatusLog = "流量API异常";
                     $newUpdateTime = $lastUpdate;
                 } else {
                     $traffic = $newTraffic;
-                    $apiStatusLog = "已更新";
+                    $apiStatusLog = $canTrafficMonitor ? "已更新" : "能力未启用";
 
-                    $this->db->addHourlyStat($account['id'], $traffic);
-                    $this->db->addDailyStat($account['id'], $traffic);
+                    if ($canTrafficMonitor) {
+                        $this->db->addHourlyStat($account['id'], $traffic);
+                        $this->db->addDailyStat($account['id'], $traffic);
+                    }
                 }
 
-                if ($status === 'Unknown') {
+                if ($canInstanceControl && $status === 'Unknown') {
                     $newUpdateTime = $lastUpdate;
                     $apiStatusLog .= "(状态Unknown)";
-                } else {
+                } elseif ($canInstanceControl) {
                     $apiStatusLog .= in_array($status, ['Starting', 'Stopping', 'Pending']) ? " [过渡态]" : " [稳定态]";
                 }
 
@@ -367,8 +415,8 @@ class AliyunTrafficCheck
 
             $maxTraffic = $account['max_traffic'];
             $usagePercent = ($maxTraffic > 0) ? round(($traffic / $maxTraffic) * 100, 2) : 0;
-            $trafficDesc = "流量:{$usagePercent}%";
-            $isOverThreshold = $usagePercent >= $threshold;
+            $trafficDesc = $canTrafficMonitor ? "流量:{$usagePercent}%" : "流量:N/A";
+            $isOverThreshold = $canTrafficMonitor && $usagePercent >= $threshold;
 
             // 3. 流量熔断
             if ($isOverThreshold) {
@@ -394,7 +442,7 @@ class AliyunTrafficCheck
             }
 
             // 4. 保活逻辑 (跳过已被定时任务操作的实例)
-            if ($keepAlive && !$isOverThreshold && !$statusTransformed) {
+            if ($canScheduleManage && $keepAlive && !$isOverThreshold && !$statusTransformed) {
                 if ($account['schedule_enabled'] == 0 || $this->isTimeInRange($currentUserTime, $account['start_time'], $account['stop_time'])) {
                     if ($status === 'Stopped') {
                         if ($this->safeControlInstance($account, 'start')) {
@@ -447,6 +495,49 @@ class AliyunTrafficCheck
         $billingCycle = date('Y-m');
 
         foreach ($accounts as $account) {
+            $provider = $this->getProviderForAccount($account);
+            $capabilities = $provider->getCapabilities($account);
+
+            if ($this->providerSupportsInstanceContext($provider, $account)) {
+                $context = $this->safeDescribeAccountContext($provider, $account);
+                $traffic = $context['trafficDataAvailable']
+                    ? (float) ($context['trafficUsedGb'] ?? 0)
+                    : (float) ($account['traffic_used'] ?? 0);
+                $status = $context['instanceStatus'] ?? ($account['instance_status'] ?? 'Unknown');
+                $this->configManager->updateAccountStatus($account['id'], $traffic, $status, $currentTime);
+                if (!empty($context['trafficDataAvailable'])) {
+                    $this->db->addHourlyStat($account['id'], $traffic);
+                    $this->db->addDailyStat($account['id'], $traffic);
+                }
+
+                $maxTraffic = (float) ($account['max_traffic'] ?? 0);
+                $usagePercent = ($maxTraffic > 0 && !empty($context['trafficDataAvailable']))
+                    ? round(($traffic / $maxTraffic) * 100, 2)
+                    : 0;
+
+                $item = [
+                    'id' => $account['id'],
+                    'cloudProvider' => $account['cloud_provider'] ?? 'aliyun',
+                    'capabilities' => $capabilities,
+                    'account' => substr($account['access_key_id'], 0, 7) . '***',
+                    'projectId' => $account['project_id'] ?? '',
+                    'securityGroupId' => $account['security_group_id'] ?? '',
+                    'flow_total' => $maxTraffic,
+                    'flow_used' => round($traffic, 2),
+                    'percentageOfUse' => $usagePercent,
+                    'region' => $account['region_id'],
+                    'regionName' => $this->getRegionName($account['region_id']),
+                    'rate95' => ($maxTraffic > 0 && $usagePercent >= $threshold),
+                    'threshold' => $threshold,
+                    'instanceStatus' => $status,
+                    'lastUpdated' => date('Y-m-d H:i:s', $currentTime),
+                    'remark' => $account['remark'] ?? ''
+                ];
+
+                $data[] = array_merge($item, $this->buildHuaweiFrontendItem($account, $context));
+                continue;
+            }
+
             $lastUpdate = $account['updated_at'] ?? 0;
             $cachedStatus = $account['instance_status'] ?? 'Unknown';
             $newUpdateTime = $currentTime;
@@ -454,7 +545,10 @@ class AliyunTrafficCheck
             $isTransientState = in_array($cachedStatus, ['Starting', 'Stopping', 'Pending', 'Unknown']);
             $checkInterval = $isTransientState ? 60 : $userInterval;
 
-            if (($currentTime - $lastUpdate) > $checkInterval) {
+            if (empty($capabilities['traffic_monitor']) && empty($capabilities['instance_start_stop'])) {
+                $traffic = $account['traffic_used'];
+                $status = 'N/A';
+            } elseif (($currentTime - $lastUpdate) > $checkInterval) {
                 $newTraffic = $this->safeGetTraffic($account);
                 $status = $this->safeGetInstanceStatus($account);
 
@@ -487,7 +581,11 @@ class AliyunTrafficCheck
 
             $item = [
                 'id' => $account['id'],
+                'cloudProvider' => $account['cloud_provider'] ?? 'aliyun',
+                'capabilities' => $provider->getCapabilities($account),
                 'account' => substr($account['access_key_id'], 0, 7) . '***',
+                'projectId' => $account['project_id'] ?? '',
+                'securityGroupId' => $account['security_group_id'] ?? '',
                 'flow_total' => (float) $account['max_traffic'],
                 'flow_used' => round($traffic, 2),
                 'percentageOfUse' => $usagePercent,
@@ -500,8 +598,16 @@ class AliyunTrafficCheck
                 'remark' => $account['remark'] ?? ''
             ];
 
+            if (!empty($capabilities['security_group_manage']) && empty($capabilities['traffic_monitor'])) {
+                $securityGroupSummary = $this->safeGetSecurityGroupSummary($account);
+                if ($securityGroupSummary) {
+                    $item['securityGroupName'] = $securityGroupSummary['name'];
+                    $item['securityGroupDescription'] = $securityGroupSummary['description'];
+                }
+            }
+
             // 注入费用数据 (如果启用)
-            if ($billingEnabled) {
+            if ($billingEnabled && !empty($capabilities['billing_summary'])) {
                 $item['cost'] = $this->safeGetBillingInfo($account, $billingCycle);
             }
 
@@ -524,10 +630,30 @@ class AliyunTrafficCheck
             return false;
 
         $currentTime = time();
+        $provider = $this->getProviderForAccount($targetAccount);
+        $capabilities = $provider->getCapabilities($targetAccount);
+
+        if ($this->providerSupportsInstanceContext($provider, $targetAccount)) {
+            $context = $this->safeDescribeAccountContext($provider, $targetAccount);
+            $traffic = $context['trafficDataAvailable']
+                ? (float) ($context['trafficUsedGb'] ?? 0)
+                : (float) ($targetAccount['traffic_used'] ?? 0);
+            $status = $context['instanceStatus'] ?? ($targetAccount['instance_status'] ?? 'Unknown');
+            $this->configManager->updateAccountStatus($id, $traffic, $status, $currentTime);
+            if (!empty($context['trafficDataAvailable'])) {
+                $this->db->addHourlyStat($targetAccount['id'], $traffic);
+                $this->db->addDailyStat($targetAccount['id'], $traffic);
+            }
+            return true;
+        }
+
         $traffic = $this->safeGetTraffic($targetAccount);
         $status = $this->safeGetInstanceStatus($targetAccount);
 
-        if ($traffic < 0) {
+        if (empty($capabilities['traffic_monitor']) && empty($capabilities['instance_start_stop'])) {
+            $traffic = $targetAccount['traffic_used'];
+            $status = $targetAccount['instance_status'] ?: 'Unknown';
+        } elseif ($traffic < 0) {
             $traffic = $targetAccount['traffic_used'];
         } else {
             $this->db->addHourlyStat($targetAccount['id'], $traffic);
@@ -539,18 +665,15 @@ class AliyunTrafficCheck
         // 刷新账单数据：仅在启用费用监控 且 无有效缓存时调用 BSS API
         $billingError = null;
         $billingEnabled = $this->configManager->get('enable_billing', '0') === '1';
-        if ($billingEnabled) {
+        if ($billingEnabled && !empty($capabilities['billing_summary'])) {
+            $provider = $this->getProviderForAccount($targetAccount);
             $billingCycle = date('Y-m');
 
             // 余额：无有效缓存时重新获取
             $balanceCache = $this->db->getBillingCache($targetAccount['id'], 'balance', '', 21600);
             if (!$balanceCache) {
                 try {
-                    $balance = $this->aliyunService->getAccountBalance(
-                        $targetAccount['access_key_id'],
-                        $targetAccount['access_key_secret'],
-                        $targetAccount['site_type'] ?? 'china'
-                    );
+                    $balance = $provider->getAccountBalance($targetAccount);
                     $this->db->setBillingCache($targetAccount['id'], 'balance', '', $balance);
                 } catch (\Exception $e) {
                     $billingError = '余额查询失败: ' . $e->getMessage();
@@ -562,13 +685,7 @@ class AliyunTrafficCheck
                 $billCache = $this->db->getBillingCache($targetAccount['id'], 'instance_bill', $billingCycle, 21600);
                 if (!$billCache) {
                     try {
-                        $bill = $this->aliyunService->getInstanceBill(
-                            $targetAccount['access_key_id'],
-                            $targetAccount['access_key_secret'],
-                            $targetAccount['instance_id'],
-                            $billingCycle,
-                            $targetAccount['site_type'] ?? 'china'
-                        );
+                        $bill = $provider->getInstanceBill($targetAccount, $billingCycle);
                         $this->db->setBillingCache($targetAccount['id'], 'instance_bill', $billingCycle, $bill);
                     } catch (\Exception $e) {
                         $billingError = ($billingError ? $billingError . '; ' : '') . '账单查询失败: ' . $e->getMessage();
@@ -604,6 +721,12 @@ class AliyunTrafficCheck
         $account = $this->configManager->getAccountById($id);
         if (!$account) {
             echo json_encode(['success' => false, 'message' => "账户配置未找到"]);
+            exit;
+        }
+
+        $capabilities = $this->getProviderForAccount($account)->getCapabilities($account);
+        if (empty($capabilities['instance_start_stop'])) {
+            echo json_encode(['success' => false, 'message' => "当前云厂商暂不支持实例开关机"]);
             exit;
         }
 
@@ -648,6 +771,146 @@ class AliyunTrafficCheck
         exit;
     }
 
+    public function getSecurityGroupRules($id)
+    {
+        if ($this->initError) {
+            return ['success' => false, 'message' => $this->initError];
+        }
+
+        $account = $this->configManager->getAccountById($id);
+        if (!$account) {
+            return ['success' => false, 'message' => '账户配置未找到'];
+        }
+
+        try {
+            $provider = $this->getProviderForAccount($account);
+            $context = null;
+            if ($this->providerSupportsInstanceContext($provider, $account)) {
+                $context = $this->safeDescribeAccountContext($provider, $account);
+                $groups = $context['securityGroups'] ?? [];
+                if (empty($groups)) {
+                    return [
+                        'success' => false,
+                        'message' => $context['discoveryMessage'] ?: '当前实例未发现可管理安全组',
+                        'data' => [
+                            'instance_id' => $context['instanceId'] ?? ($account['instance_id'] ?? ''),
+                            'instance_name' => $context['instanceName'] ?? '',
+                            'public_ip' => $context['publicIp'] ?? '',
+                            'region_id' => $account['region_id'],
+                            'discovery_status' => $context['discoveryStatus'] ?? '',
+                            'discovery_mode' => $context['discoveryMode'] ?? '',
+                            'discovery_message' => $context['discoveryMessage'] ?? '',
+                            'using_fallback_security_group' => !empty($context['usingFallbackSecurityGroup']),
+                            'security_groups' => []
+                        ]
+                    ];
+                }
+            } else {
+                $groups = $provider->getInstanceSecurityGroups($account);
+            }
+
+            return [
+                'success' => true,
+                'data' => [
+                    'instance_id' => $context['instanceId'] ?? ($account['instance_id'] ?? ''),
+                    'instance_name' => $context['instanceName'] ?? '',
+                    'public_ip' => $context['publicIp'] ?? '',
+                    'region_id' => $account['region_id'],
+                    'discovery_status' => $context['discoveryStatus'] ?? '',
+                    'discovery_mode' => $context['discoveryMode'] ?? '',
+                    'discovery_message' => $context['discoveryMessage'] ?? '',
+                    'using_fallback_security_group' => !empty($context['usingFallbackSecurityGroup']),
+                    'security_groups' => $groups
+                ]
+            ];
+        } catch (ClientException $e) {
+            $this->db->addLog('error', "安全组查询失败 [{$account['access_key_id']}]: 权限不足或配置错误");
+            return ['success' => false, 'message' => '安全组查询失败：权限不足或配置错误'];
+        } catch (HuaweiClientRequestException $e) {
+            $message = $this->formatHuaweiExceptionMessage($e);
+            $this->db->addLog('error', "安全组查询失败 [{$account['access_key_id']}]: {$message}");
+            return ['success' => false, 'message' => '安全组查询失败：' . $message];
+        } catch (ServerException $e) {
+            $this->db->addLog('error', "安全组查询失败 [{$account['access_key_id']}]: 阿里云服务无响应");
+            return ['success' => false, 'message' => '安全组查询失败：阿里云服务无响应'];
+        } catch (\Exception $e) {
+            $this->db->addLog('error', "安全组查询失败 [{$account['access_key_id']}]: " . $e->getMessage());
+            return ['success' => false, 'message' => '安全组查询失败：' . $e->getMessage()];
+        }
+    }
+
+    public function addSecurityGroupRule($id, $data)
+    {
+        if ($this->initError) {
+            return ['success' => false, 'message' => $this->initError];
+        }
+
+        $account = $this->configManager->getAccountById($id);
+        if (!$account) {
+            return ['success' => false, 'message' => '账户配置未找到'];
+        }
+
+        try {
+            $rule = $this->normalizeSecurityGroupRuleInput($data);
+            $this->getProviderForAccount($account)->addSecurityGroupRule($account, $rule['security_group_id'], $rule);
+
+            $this->db->addLog(
+                'info',
+                "新增安全组规则 [{$account['access_key_id']}] {$rule['security_group_id']} {$rule['ip_protocol']} {$rule['port_range']} <- {$rule['source_cidr_ip']}"
+            );
+
+            return ['success' => true, 'message' => '端口规则已添加'];
+        } catch (ClientException $e) {
+            $this->db->addLog('error', "新增安全组规则失败 [{$account['access_key_id']}]: 权限不足或配置错误");
+            return ['success' => false, 'message' => '新增安全组规则失败：权限不足或配置错误'];
+        } catch (HuaweiClientRequestException $e) {
+            $message = $this->formatHuaweiExceptionMessage($e);
+            $this->db->addLog('error', "新增安全组规则失败 [{$account['access_key_id']}]: {$message}");
+            return ['success' => false, 'message' => '新增安全组规则失败：' . $message];
+        } catch (ServerException $e) {
+            $this->db->addLog('error', "新增安全组规则失败 [{$account['access_key_id']}]: 阿里云服务无响应");
+            return ['success' => false, 'message' => '新增安全组规则失败：阿里云服务无响应'];
+        } catch (\Exception $e) {
+            $this->db->addLog('error', "新增安全组规则失败 [{$account['access_key_id']}]: " . $e->getMessage());
+            return ['success' => false, 'message' => '新增安全组规则失败：' . $e->getMessage()];
+        }
+    }
+
+    public function deleteSecurityGroupRule($id, $data)
+    {
+        if ($this->initError) {
+            return ['success' => false, 'message' => $this->initError];
+        }
+
+        $account = $this->configManager->getAccountById($id);
+        if (!$account) {
+            return ['success' => false, 'message' => '账户配置未找到'];
+        }
+
+        try {
+            $rule = $this->normalizeSecurityGroupRuleDeleteInput($data);
+            $this->getProviderForAccount($account)->deleteSecurityGroupRule($account, $rule['security_group_id'], $rule);
+
+            $ruleLabel = $rule['security_group_rule_id'] ?: ($rule['ip_protocol'] . ' ' . $rule['port_range']);
+            $this->db->addLog('info', "删除安全组规则 [{$account['access_key_id']}] {$rule['security_group_id']} {$ruleLabel}");
+
+            return ['success' => true, 'message' => '端口规则已删除'];
+        } catch (ClientException $e) {
+            $this->db->addLog('error', "删除安全组规则失败 [{$account['access_key_id']}]: 权限不足或配置错误");
+            return ['success' => false, 'message' => '删除安全组规则失败：权限不足或配置错误'];
+        } catch (HuaweiClientRequestException $e) {
+            $message = $this->formatHuaweiExceptionMessage($e);
+            $this->db->addLog('error', "删除安全组规则失败 [{$account['access_key_id']}]: {$message}");
+            return ['success' => false, 'message' => '删除安全组规则失败：' . $message];
+        } catch (ServerException $e) {
+            $this->db->addLog('error', "删除安全组规则失败 [{$account['access_key_id']}]: 阿里云服务无响应");
+            return ['success' => false, 'message' => '删除安全组规则失败：阿里云服务无响应'];
+        } catch (\Exception $e) {
+            $this->db->addLog('error', "删除安全组规则失败 [{$account['access_key_id']}]: " . $e->getMessage());
+            return ['success' => false, 'message' => '删除安全组规则失败：' . $e->getMessage()];
+        }
+    }
+
     public function sendTestEmail($to)
     {
         return $this->notificationService->sendTestEmail($to);
@@ -672,10 +935,131 @@ class AliyunTrafficCheck
         }
     }
 
+    private function getProviderForAccount($account)
+    {
+        return $this->providerFactory->getProvider($account['cloud_provider'] ?? 'aliyun');
+    }
+
+    private function providerSupportsInstanceContext($provider, $account)
+    {
+        return ($account['cloud_provider'] ?? 'aliyun') === 'huaweicloud'
+            && is_object($provider)
+            && method_exists($provider, 'describeAccountContext');
+    }
+
+    private function safeDescribeAccountContext($provider, $account)
+    {
+        try {
+            return $provider->describeAccountContext($account);
+        } catch (\Throwable $e) {
+            return [
+                'instanceId' => $account['instance_id'] ?? '',
+                'instanceName' => '',
+                'instanceStatus' => 'Unknown',
+                'publicIp' => '',
+                'securityGroups' => [],
+                'securityGroupCount' => 0,
+                'securityGroupNames' => [],
+                'discoveryStatus' => 'error',
+                'discoveryMode' => 'security_group_fallback',
+                'discoveryMessage' => trim((string) $e->getMessage()) ?: '华为云实例发现失败',
+                'usingFallbackSecurityGroup' => false,
+                'fallbackSecurityGroupId' => trim((string) ($account['security_group_id'] ?? '')),
+            ];
+        }
+    }
+
+    private function buildHuaweiFrontendItem(array $account, array $context): array
+    {
+        $primaryGroup = $context['securityGroups'][0] ?? [];
+        $trafficDataAvailable = !empty($context['trafficDataAvailable']);
+        $trafficError = trim((string) ($context['trafficError'] ?? ''));
+        $securityGroupCount = (int) ($context['securityGroupCount'] ?? 0);
+
+        return [
+            'instanceId' => $context['instanceId'] ?? ($account['instance_id'] ?? ''),
+            'instanceName' => $context['instanceName'] ?? '',
+            'publicIp' => $context['publicIp'] ?? '',
+            'securityGroupCount' => $securityGroupCount,
+            'securityGroupNames' => $context['securityGroupNames'] ?? [],
+            'securityGroupName' => $primaryGroup['security_group_name'] ?? '',
+            'securityGroupDescription' => $primaryGroup['description'] ?? '',
+            'discoveryStatus' => $context['discoveryStatus'] ?? 'error',
+            'discoveryMode' => $context['discoveryMode'] ?? 'security_group_fallback',
+            'discoveryMessage' => $context['discoveryMessage'] ?? '',
+            'usingFallbackSecurityGroup' => !empty($context['usingFallbackSecurityGroup']),
+            'fallbackSecurityGroupId' => $context['fallbackSecurityGroupId'] ?? '',
+            'trafficDataAvailable' => $trafficDataAvailable,
+            'trafficError' => $trafficError,
+            'primaryMetricUnit' => $trafficDataAvailable ? 'GB' : '',
+            'primaryMetricLabel' => $trafficDataAvailable ? '公网流量' : '公网流量不可用',
+            'primaryMetricValueText' => $trafficDataAvailable
+                ? (string) round((float) ($context['trafficUsedGb'] ?? 0), 2)
+                : '--',
+            'secondaryMetricLabel' => '可管理安全组',
+            'secondaryMetricValue' => $securityGroupCount,
+        ];
+    }
+
+    private function getHuaweiVisualPercent(int $count): int
+    {
+        if ($count <= 0) {
+            return 0;
+        }
+        if ($count === 1) {
+            return 35;
+        }
+        if ($count === 2) {
+            return 60;
+        }
+        if ($count === 3) {
+            return 80;
+        }
+
+        return 100;
+    }
+
+    private function formatHuaweiExceptionMessage($e)
+    {
+        if (!method_exists($e, 'getErrorCode') || !method_exists($e, 'getErrorMsg')) {
+            return trim((string) $e->getMessage()) ?: '华为云请求失败';
+        }
+
+        $errorCode = (string) $e->getErrorCode();
+        $errorMsg = trim((string) $e->getErrorMsg());
+
+        if ($errorCode === 'VPC.9904') {
+            return '当前 Region ID / Project ID 下找不到这个 Security Group ID';
+        }
+
+        if ($errorCode !== '' && $errorMsg !== '') {
+            return "{$errorCode}: {$errorMsg}";
+        }
+
+        return $errorMsg ?: ($errorCode ?: '华为云请求失败');
+    }
+
+    private function safeGetSecurityGroupSummary($account)
+    {
+        try {
+            $groups = $this->getProviderForAccount($account)->getInstanceSecurityGroups($account);
+            if (empty($groups)) {
+                return null;
+            }
+
+            return [
+                'name' => $groups[0]['security_group_name'] ?? '',
+                'description' => $groups[0]['description'] ?? ''
+            ];
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
     private function safeGetTraffic($account)
     {
         try {
-            return $this->aliyunService->getTraffic($account['access_key_id'], $account['access_key_secret'], $account['region_id']);
+            return $this->getProviderForAccount($account)->getTraffic($account);
         } catch (ClientException $e) {
             $code = $e->getErrorCode();
             $this->db->addLog('error', "流量查询配置错误: " . ($code ?: "鉴权失败"));
@@ -686,6 +1070,8 @@ class AliyunTrafficCheck
         } catch (\Exception $e) {
             if (strpos($e->getMessage(), 'cURL error') !== false) {
                 $this->db->addLog('error', "流量查询失败: 网络连接超时");
+            } elseif (strpos($e->getMessage(), 'SOCKS5') !== false || strpos($e->getMessage(), '代理') !== false) {
+                $this->db->addLog('error', "流量查询失败: " . $e->getMessage());
             } else {
                 $this->db->addLog('error', "流量查询失败: 系统未知错误");
             }
@@ -696,11 +1082,13 @@ class AliyunTrafficCheck
     private function safeGetInstanceStatus($account)
     {
         try {
-            return $this->aliyunService->getInstanceStatus($account);
+            return $this->getProviderForAccount($account)->getInstanceStatus($account);
         } catch (\Exception $e) {
             if (strpos($e->getMessage(), 'cURL error') !== false) {
             } elseif ($e instanceof ClientException) {
                 $this->db->addLog('error', "实例状态查询配置错误: 鉴权失败");
+            } elseif (strpos($e->getMessage(), 'SOCKS5') !== false || strpos($e->getMessage(), '代理') !== false) {
+                $this->db->addLog('error', "实例状态查询失败: " . $e->getMessage());
             } else {
             }
             return 'Unknown';
@@ -710,7 +1098,7 @@ class AliyunTrafficCheck
     private function safeControlInstance($account, $action, $shutdownMode = 'KeepCharging')
     {
         try {
-            return $this->aliyunService->controlInstance($account, $action, $shutdownMode);
+            return $this->getProviderForAccount($account)->controlInstance($account, $action, $shutdownMode);
         } catch (ClientException $e) {
             $this->db->addLog('error', "实例操作失败 [{$action}]: 权限不足或配置错误");
             return false;
@@ -718,9 +1106,104 @@ class AliyunTrafficCheck
             $this->db->addLog('error', "实例操作失败 [{$action}]: 阿里云服务无响应");
             return false;
         } catch (\Exception $e) {
-            $this->db->addLog('error', "实例操作失败 [{$action}]: 无法连接API");
+            if (strpos($e->getMessage(), 'SOCKS5') !== false || strpos($e->getMessage(), '代理') !== false) {
+                $this->db->addLog('error', "实例操作失败 [{$action}]: " . $e->getMessage());
+            } else {
+                $this->db->addLog('error', "实例操作失败 [{$action}]: 无法连接API");
+            }
             return false;
         }
+    }
+
+    private function normalizeSecurityGroupRuleInput($data)
+    {
+        $rule = [
+            'security_group_id' => trim((string) ($data['security_group_id'] ?? '')),
+            'ip_protocol' => strtoupper(trim((string) ($data['ip_protocol'] ?? 'TCP'))),
+            'port_range' => trim((string) ($data['port_range'] ?? '')),
+            'source_cidr_ip' => trim((string) ($data['source_cidr_ip'] ?? '0.0.0.0/0')),
+            'description' => trim((string) ($data['description'] ?? ''))
+        ];
+
+        if ($rule['security_group_id'] === '') {
+            throw new \Exception('请选择安全组');
+        }
+
+        $allowedProtocols = ['TCP', 'UDP', 'ICMP', 'GRE', 'ALL'];
+        if (!in_array($rule['ip_protocol'], $allowedProtocols, true)) {
+            throw new \Exception('仅支持 TCP、UDP、ICMP、GRE、ALL 协议');
+        }
+
+        if (!$this->isValidIpv4OrCidr($rule['source_cidr_ip'])) {
+            throw new \Exception('来源地址格式无效，请填写 IPv4 或 CIDR');
+        }
+
+        if (in_array($rule['ip_protocol'], ['TCP', 'UDP'], true)) {
+            if (!preg_match('/^\d{1,5}\/\d{1,5}$/', $rule['port_range'])) {
+                throw new \Exception('端口范围格式无效，请使用 80/80 或 3000/3999');
+            }
+
+            [$startPort, $endPort] = array_map('intval', explode('/', $rule['port_range']));
+            if ($startPort < 0 || $endPort < 0 || $startPort > 65535 || $endPort > 65535 || $startPort > $endPort) {
+                throw new \Exception('端口范围无效，请检查起止端口');
+            }
+        } elseif ($rule['port_range'] !== '-1/-1') {
+            throw new \Exception('ICMP、GRE、ALL 协议的端口范围必须为 -1/-1');
+        }
+
+        if (strlen($rule['description']) > 128) {
+            throw new \Exception('规则备注长度不能超过 128 个字符');
+        }
+
+        return $rule;
+    }
+
+    private function normalizeSecurityGroupRuleDeleteInput($data)
+    {
+        $rule = [
+            'security_group_id' => trim((string) ($data['security_group_id'] ?? '')),
+            'security_group_rule_id' => trim((string) ($data['security_group_rule_id'] ?? '')),
+            'ip_protocol' => strtoupper(trim((string) ($data['ip_protocol'] ?? ''))),
+            'port_range' => trim((string) ($data['port_range'] ?? '')),
+            'source_cidr_ip' => trim((string) ($data['source_cidr_ip'] ?? '')),
+            'source_group_id' => trim((string) ($data['source_group_id'] ?? '')),
+            'source_prefix_list_id' => trim((string) ($data['source_prefix_list_id'] ?? '')),
+            'policy' => trim((string) ($data['policy'] ?? 'accept')),
+            'nic_type' => trim((string) ($data['nic_type'] ?? 'intranet'))
+        ];
+
+        if ($rule['security_group_id'] === '') {
+            throw new \Exception('缺少安全组 ID');
+        }
+
+        if ($rule['security_group_rule_id'] === '' && $rule['source_cidr_ip'] === '' && $rule['source_group_id'] === '' && $rule['source_prefix_list_id'] === '') {
+            throw new \Exception('缺少可删除的规则标识');
+        }
+
+        return $rule;
+    }
+
+    private function isValidIpv4OrCidr($value)
+    {
+        if ($value === '') {
+            return false;
+        }
+
+        if (strpos($value, '/') === false) {
+            return filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false;
+        }
+
+        [$ip, $mask] = explode('/', $value, 2);
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) {
+            return false;
+        }
+
+        if (!ctype_digit((string) $mask)) {
+            return false;
+        }
+
+        $mask = (int) $mask;
+        return $mask >= 0 && $mask <= 32;
     }
 
     private function isTimeInRange($current, $start, $end)
@@ -752,7 +1235,12 @@ class AliyunTrafficCheck
             'cn-heyuan' => '华南2(河源)',
             'cn-guangzhou' => '华南3(广州)',
             'cn-chengdu' => '西南1(成都)',
+            'cn-south-1' => '华南-广州',
+            'cn-north-4' => '华北-北京4',
+            'cn-east-3' => '华东-上海一',
+            'cn-southwest-2' => '西南-贵阳一',
             'ap-northeast-1' => '日本(东京)',
+            'ap-southeast-3' => '亚太-新加坡',
         ];
         return $regions[$regionId] ?? $regionId;
     }
@@ -781,16 +1269,14 @@ class AliyunTrafficCheck
             $costInfo['currency'] = $balanceCache['Currency'] ?? 'CNY';
         } else {
             try {
-                $balance = $this->aliyunService->getAccountBalance(
-                    $account['access_key_id'],
-                    $account['access_key_secret'],
-                    $account['site_type'] ?? 'china'
-                );
+                $balance = $this->getProviderForAccount($account)->getAccountBalance($account);
                 $costInfo['balance'] = $balance['AvailableAmount'];
                 $costInfo['currency'] = $balance['Currency'] ?? 'CNY';
                 $this->db->setBillingCache($account['id'], 'balance', '', $balance);
             } catch (\Exception $e) {
-                $costInfo['error'] = '余额查询失败';
+                $costInfo['error'] = (strpos($e->getMessage(), 'SOCKS5') !== false || strpos($e->getMessage(), '代理') !== false)
+                    ? '代理配置错误'
+                    : '余额查询失败';
             }
         }
 
@@ -801,17 +1287,13 @@ class AliyunTrafficCheck
                 $costInfo['monthly_cost'] = $billCache['TotalCost'];
             } else {
                 try {
-                    $bill = $this->aliyunService->getInstanceBill(
-                        $account['access_key_id'],
-                        $account['access_key_secret'],
-                        $account['instance_id'],
-                        $billingCycle,
-                        $account['site_type'] ?? 'china'
-                    );
+                    $bill = $this->getProviderForAccount($account)->getInstanceBill($account, $billingCycle);
                     $costInfo['monthly_cost'] = $bill['TotalCost'];
                     $this->db->setBillingCache($account['id'], 'instance_bill', $billingCycle, $bill);
                 } catch (\Exception $e) {
-                    if ($costInfo['error']) {
+                    if (strpos($e->getMessage(), 'SOCKS5') !== false || strpos($e->getMessage(), '代理') !== false) {
+                        $costInfo['error'] = '代理配置错误';
+                    } elseif ($costInfo['error']) {
                         $costInfo['error'] = 'BSS权限不足';
                     } else {
                         $costInfo['error'] = '账单查询失败';

@@ -12,6 +12,10 @@
     <link rel="stylesheet" href="static/tailwind-compiled.css">
 
     <style>
+        html {
+            min-height: 100%;
+        }
+
         [v-cloak] {
             display: none !important;
         }
@@ -87,6 +91,9 @@
 
         body {
             background-color: #F2F2F7;
+            min-height: 100vh;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
         }
 
         /* Chart Modal Animations */
@@ -103,9 +110,9 @@
     </style>
 </head>
 
-<body class="text-[#1C1C1E]">
+<body class="text-[#1C1C1E] overflow-y-auto">
 
-    <div id="app" v-cloak class="min-h-screen p-6 md:p-12 flex flex-col items-center">
+    <div id="app" v-cloak class="min-h-screen w-full p-6 md:p-12 flex flex-col items-center">
 
         <div v-if="cronWarning && initialized && !criticalError"
             class="w-full max-w-5xl mb-6 bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-r-xl shadow-sm animate-fade-in">
@@ -143,51 +150,94 @@
             class="w-full max-w-5xl grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-fade-in-up">
             <div v-for="(item, index) in statusData" :key="index"
                 class="glass-panel rounded-[32px] p-6 flex flex-col justify-between relative overflow-hidden group hover:shadow-2xl transition-all duration-500">
-                <div class="absolute top-0 right-0 p-6 opacity-50 flex gap-2">
-                    <button v-if="isAdmin" @click="openChart(item.id, item.account)"
-                        class="p-1 rounded-full hover:bg-white/50 text-gray-400 hover:text-blue-500 transition-colors mr-1"
-                        title="查看流量历史">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2"
-                            stroke="currentColor" class="w-4 h-4">
-                            <path stroke-linecap="round" stroke-linejoin="round"
-                                d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
-                        </svg>
-                    </button>
-
-                    <button v-if="isAdmin" @click="refreshSingle(item.id, index)"
-                        class="p-1 rounded-full hover:bg-white/50 text-gray-400 hover:text-gray-600 transition-colors"
-                        :class="{'animate-spin': refreshingMap[index]}" :disabled="refreshingMap[index]">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2"
-                            stroke="currentColor" class="w-4 h-4">
-                            <path stroke-linecap="round" stroke-linejoin="round"
-                                d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
-                        </svg>
-                    </button>
-                    <div class="w-2 h-2 rounded-full transition-colors duration-500 mt-1.5"
-                        :class="item.rate95 ? 'bg-red-500 shadow-[0_0_10px_rgba(255,59,48,0.5)]' : 'bg-green-500 shadow-[0_0_10px_rgba(52,199,89,0.5)]'">
-                    </div>
-                </div>
-
                 <div>
-                    <div class="flex items-center gap-2 mb-4">
-                        <span
-                            class="px-2 py-1 bg-gray-100/50 rounded-lg text-[10px] font-bold tracking-wider text-gray-500 uppercase border border-white/40">{{
-                            item.regionName }}</span>
-                        <span class="text-[10px] text-gray-400">{{ item.lastUpdated ? item.lastUpdated.split(' ')[1] :
-                            '' }} 更新</span>
+                    <div class="flex items-start justify-between gap-4 mb-4">
+                        <div class="flex flex-wrap items-center gap-2 min-w-0">
+                            <span
+                                class="px-2 py-1 rounded-lg text-[10px] font-bold tracking-wider uppercase border shrink-0"
+                                :class="getProviderBadgeClass(item.cloudProvider)">{{ getProviderLabel(item.cloudProvider) }}</span>
+                            <span
+                                class="px-2 py-1 bg-gray-100/50 rounded-lg text-[10px] font-bold tracking-wider text-gray-500 uppercase border border-white/40 shrink-0">{{
+                                item.regionName }}</span>
+                            <span class="text-[10px] text-gray-400 shrink-0">{{ item.lastUpdated ? item.lastUpdated.split(' ')[1] :
+                                '' }} 更新</span>
+                        </div>
+                        <div class="flex items-center gap-2 opacity-60 shrink-0">
+                            <button v-if="isAdmin && canShowChart(item)" @click="openChart(item.id, item.account)"
+                                class="p-1 rounded-full hover:bg-white/50 text-gray-400 hover:text-blue-500 transition-colors"
+                                title="查看流量历史">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2"
+                                    stroke="currentColor" class="w-4 h-4">
+                                    <path stroke-linecap="round" stroke-linejoin="round"
+                                        d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
+                                </svg>
+                            </button>
+
+                            <button v-if="isAdmin && itemSupports(item, 'security_group_manage')" @click="openSecurityGroupModal(item)"
+                                class="p-1 rounded-full hover:bg-white/50 text-gray-400 hover:text-emerald-600 transition-colors"
+                                title="端口管理">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2"
+                                    stroke="currentColor" class="w-4 h-4">
+                                    <path stroke-linecap="round" stroke-linejoin="round"
+                                        d="M9 12.75 11.25 15 15 9.75m5.25 2.109c0 4.553-3.182 8.422-7.5 9.474a9.72 9.72 0 01-7.5-9.474V6.033a1.125 1.125 0 01.75-1.06l6-2.25a1.125 1.125 0 01.75 0l6 2.25c.444.166.75.59.75 1.06v5.826z" />
+                                </svg>
+                            </button>
+
+                            <button v-if="isAdmin" @click="refreshSingle(item.id, index)"
+                                class="p-1 rounded-full hover:bg-white/50 text-gray-400 hover:text-gray-600 transition-colors"
+                                :class="{'animate-spin': refreshingMap[index]}" :disabled="refreshingMap[index]">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2"
+                                    stroke="currentColor" class="w-4 h-4">
+                                    <path stroke-linecap="round" stroke-linejoin="round"
+                                        d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                                </svg>
+                            </button>
+                            <div class="w-2 h-2 rounded-full transition-colors duration-500"
+                                :class="getCardIndicatorClass(item)">
+                            </div>
+                        </div>
                     </div>
-                    <h3 class="text-3xl font-extrabold tracking-tighter text-[#1C1C1E]">
-                        {{ item.flow_used }} <span class="text-base font-medium text-gray-400">GB</span>
-                    </h3>
-                    <div class="flex justify-between items-end mt-1">
-                        <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide">已用流量</p>
-                        <p class="text-xs font-medium text-gray-400">{{ item.percentageOfUse }}% / {{ item.flow_total
-                            }}G</p>
-                    </div>
-                    <div class="w-full h-1.5 bg-gray-200/50 rounded-full mt-3 overflow-hidden">
-                        <div class="h-full rounded-full transition-all duration-1000 ease-out"
-                            :class="item.rate95 ? 'bg-[#FF3B30]' : 'bg-[#1C1C1E]'"
-                            :style="{ width: Math.min(item.percentageOfUse, 100) + '%' }"></div>
+                    <template v-if="shouldUsePrimaryMetricCard(item)">
+                        <h3 class="text-3xl font-extrabold tracking-tighter text-[#1C1C1E]">
+                            {{ getPrimaryMetricValue(item) }} <span class="text-base font-medium text-gray-400">{{ getPrimaryMetricUnit(item) }}</span>
+                        </h3>
+                        <div class="flex justify-between items-end mt-1">
+                            <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide">{{ getPrimaryMetricLabel(item) }}</p>
+                            <p class="text-xs font-medium text-gray-400">{{ getPrimaryMetricSummary(item) }}</p>
+                        </div>
+                        <div class="w-full h-1.5 bg-gray-200/50 rounded-full mt-3 overflow-hidden">
+                            <div class="h-full rounded-full transition-all duration-1000 ease-out"
+                                :class="item.rate95 ? 'bg-[#FF3B30]' : 'bg-[#1C1C1E]'"
+                                :style="{ width: Math.min(item.percentageOfUse, 100) + '%' }"></div>
+                        </div>
+
+                        <div v-if="item.cloudProvider === 'huaweicloud' && (item.trafficError || item.discoveryStatus !== 'success')" class="mt-4">
+                            <p class="text-[11px] leading-relaxed text-amber-600">
+                                {{ item.trafficError || item.discoveryMessage }}
+                            </p>
+                        </div>
+                    </template>
+                    <div v-else class="rounded-2xl bg-white/50 border border-white/60 px-4 py-5 space-y-3">
+                        <div>
+                            <p class="text-sm font-semibold text-[#1C1C1E]">{{ item.securityGroupName || getProviderLabel(item.cloudProvider) }}</p>
+                            <p class="text-xs text-gray-400 mt-2">当前账号未启用统一流量监控卡片展示。</p>
+                        </div>
+                        <p v-if="item.securityGroupDescription" class="text-[11px] text-gray-500 leading-relaxed">
+                            {{ item.securityGroupDescription }}
+                        </p>
+                        <div class="flex flex-wrap gap-2">
+                            <span v-if="itemSupports(item, 'security_group_manage')"
+                                class="px-2 py-1 rounded-lg text-[10px] font-bold tracking-wide bg-emerald-50 text-emerald-600 border border-emerald-200">
+                                已启用安全组管理
+                            </span>
+                            <span v-if="item.securityGroupId"
+                                class="px-2 py-1 rounded-lg text-[10px] font-mono tracking-wide bg-gray-100 text-gray-500 border border-gray-200 break-all">
+                                SG: {{ item.securityGroupId }}
+                            </span>
+                        </div>
+                        <p v-if="item.projectId" class="text-[10px] text-gray-400 font-mono break-all">
+                            Project: {{ item.projectId }}
+                        </p>
                     </div>
                 </div>
                 <div class="mt-6 pt-6 border-t border-gray-200/40 flex flex-col gap-2">
@@ -196,11 +246,19 @@
                         <span class="text-sm font-bold" :class="getInstanceStatusColor(item.instanceStatus)">{{
                             item.instanceStatus }}</span>
                     </div>
+                    <div v-if="item.cloudProvider === 'huaweicloud' && item.publicIp" class="flex justify-between items-center">
+                        <span class="text-sm font-medium text-gray-500">公网 IP</span>
+                        <span class="text-sm font-medium text-[#1C1C1E] font-mono">{{ item.publicIp }}</span>
+                    </div>
+                    <div v-if="item.cloudProvider === 'huaweicloud'" class="flex justify-between items-center">
+                        <span class="text-sm font-medium text-gray-500">Max Traffic</span>
+                        <span class="text-sm font-medium text-[#1C1C1E]">{{ item.flow_total }} GB</span>
+                    </div>
                     <div class="flex justify-between items-center">
                         <span class="text-sm font-medium text-gray-500">账号</span>
                         <span class="text-sm font-medium text-[#1C1C1E] font-mono">{{ item.account }}</span>
                     </div>
-                    <div v-if="isAdmin && item.cost && item.cost.enabled" class="flex justify-between items-center">
+                    <div v-if="isAdmin && itemSupports(item, 'billing_summary') && item.cost && item.cost.enabled" class="flex justify-between items-center">
                         <span class="text-sm font-medium text-gray-500">本月费用</span>
                         <span v-if="!item.cost.error" class="text-xs font-medium">
                             <span v-if="item.cost.monthly_cost !== null" class="font-bold text-orange-500">{{
@@ -219,14 +277,14 @@
                         <span class="text-sm font-medium text-gray-500">备注</span>
                         <span class="text-sm font-medium text-[#1C1C1E]">{{ item.remark }}</span>
                     </div>
-                    <div class="flex justify-between items-center">
+                    <div v-if="itemSupports(item, 'traffic_monitor')" class="flex justify-between items-center">
                         <span class="text-xs font-medium text-gray-400">当前阈值</span>
                         <span class="text-xs font-medium text-gray-400">{{ item.threshold }}%</span>
                     </div>
 
                     <!-- 新增：手工控制区域 (仅登录用户可见，且仅在 运行中/已停止 状态下显示) -->
                     <!-- 注意：这里增加了 item.instanceStatus 的判断，操作后状态变为 Pending 时会自动隐藏 -->
-                    <div v-if="isAdmin && (item.instanceStatus === 'Running' || item.instanceStatus === 'Stopped')"
+                    <div v-if="isAdmin && itemSupports(item, 'instance_start_stop') && (item.instanceStatus === 'Running' || item.instanceStatus === 'Stopped')"
                         class="flex justify-between items-center pt-2">
                         <span class="text-xs font-medium text-gray-400">手动控制</span>
 
@@ -270,6 +328,7 @@
                         </button>
                     </div>
                 </div>
+            </div>
                 <div v-if="statusData.length === 0" class="col-span-full py-20 text-center text-gray-400">
                     <p>暂无监控账号，请点击右上角登录管理员添加。</p>
                 </div>
@@ -279,10 +338,10 @@
             <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-800"></div>
         </div>
 
-        <div v-if="showChartModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div v-if="showChartModal" class="fixed inset-0 z-50 overflow-y-auto p-4 md:p-6">
             <div class="absolute inset-0 bg-gray-300/30 backdrop-blur-md" @click="closeChart"></div>
             <div
-                class="glass-panel w-full max-w-5xl h-[500px] flex flex-col p-0 rounded-[32px] relative z-10 shadow-2xl bg-white/90 overflow-hidden">
+                class="glass-panel relative z-10 my-4 md:my-8 w-full max-w-5xl h-[70vh] md:h-[500px] max-h-[85vh] flex flex-col p-0 rounded-[32px] shadow-2xl bg-white/90 overflow-hidden mx-auto">
                 <div class="flex justify-between items-center p-6 border-b border-gray-100">
                     <div>
                         <h3 class="text-xl font-bold text-[#1C1C1E]">流量统计</h3>
@@ -329,11 +388,179 @@
             </div>
         </div>
 
+        <div v-if="showSecurityGroupModal" class="fixed inset-0 z-50 overflow-y-auto p-4 md:p-6">
+            <div class="absolute inset-0 bg-gray-300/30 backdrop-blur-md" @click="closeSecurityGroupModal"></div>
+            <div
+                class="glass-panel relative z-10 my-4 md:my-8 w-full max-w-5xl max-h-[calc(100vh-2rem)] md:max-h-[85vh] flex flex-col rounded-[32px] shadow-2xl bg-white/90 overflow-hidden mx-auto">
+                <div class="flex justify-between items-start gap-4 p-6 border-b border-gray-100">
+                    <div>
+                        <h3 class="text-xl font-bold text-[#1C1C1E]">端口管理</h3>
+                        <p class="text-xs text-gray-400 font-mono mt-1">账号: {{ currentSecurityGroupAccount }}</p>
+                        <p class="text-xs text-gray-400 font-mono mt-1">实例: {{ currentSecurityGroupInstanceName || currentSecurityGroupInstanceId || '未绑定实例' }} | 区域: {{ currentSecurityGroupRegion }}</p>
+                        <p v-if="currentSecurityGroupPublicIp" class="text-xs text-gray-400 font-mono mt-1">公网 IP: {{ currentSecurityGroupPublicIp }}</p>
+                        <p v-if="currentSecurityGroupDiscoveryMode" class="text-xs text-gray-400 mt-1">模式: {{ getHuaweiDiscoveryLabel({ discoveryStatus: currentSecurityGroupDiscoveryStatus, discoveryMode: currentSecurityGroupDiscoveryMode, usingFallbackSecurityGroup: currentSecurityGroupFallback }) }}</p>
+                    </div>
+
+                    <button @click="closeSecurityGroupModal"
+                        class="p-2 rounded-full hover:bg-gray-100 text-gray-400 transition">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="p-6 border-b border-gray-100 bg-white/40">
+                    <div class="flex flex-wrap items-center gap-2 mb-4">
+                        <span class="text-xs font-medium text-gray-500">快捷添加</span>
+                        <button @click="applySecurityGroupPreset('TCP', '22/22')"
+                            class="px-3 py-1 rounded-full text-xs font-bold bg-gray-100 hover:bg-gray-200 text-gray-600 transition">22
+                            SSH</button>
+                        <button @click="applySecurityGroupPreset('TCP', '80/80')"
+                            class="px-3 py-1 rounded-full text-xs font-bold bg-gray-100 hover:bg-gray-200 text-gray-600 transition">80
+                            HTTP</button>
+                        <button @click="applySecurityGroupPreset('TCP', '443/443')"
+                            class="px-3 py-1 rounded-full text-xs font-bold bg-gray-100 hover:bg-gray-200 text-gray-600 transition">443
+                            HTTPS</button>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+                        <div class="space-y-1">
+                            <label class="text-xs font-medium text-gray-500 ml-1">安全组</label>
+                            <select v-model="securityGroupForm.security_group_id"
+                                class="w-full glass-input rounded-xl px-4 py-2 text-sm appearance-none">
+                                <option value="" disabled>请选择安全组</option>
+                                <option v-for="group in securityGroups" :key="group.security_group_id"
+                                    :value="group.security_group_id">
+                                    {{ group.security_group_name }} ({{ group.security_group_id }})
+                                </option>
+                            </select>
+                        </div>
+                        <div class="space-y-1">
+                            <label class="text-xs font-medium text-gray-500 ml-1">协议</label>
+                            <select v-model="securityGroupForm.ip_protocol" @change="syncSecurityGroupPortRange"
+                                class="w-full glass-input rounded-xl px-4 py-2 text-sm appearance-none">
+                                <option value="TCP">TCP</option>
+                                <option value="UDP">UDP</option>
+                                <option value="ICMP">ICMP</option>
+                                <option value="GRE">GRE</option>
+                                <option value="ALL">ALL</option>
+                            </select>
+                        </div>
+                        <div class="space-y-1">
+                            <label class="text-xs font-medium text-gray-500 ml-1">端口范围</label>
+                            <input v-model.trim="securityGroupForm.port_range" placeholder="80/80"
+                                class="w-full glass-input rounded-xl px-4 py-2 text-sm">
+                        </div>
+                        <div class="space-y-1">
+                            <label class="text-xs font-medium text-gray-500 ml-1">来源 CIDR</label>
+                            <input v-model.trim="securityGroupForm.source_cidr_ip" placeholder="0.0.0.0/0"
+                                class="w-full glass-input rounded-xl px-4 py-2 text-sm">
+                        </div>
+                        <div class="space-y-1">
+                            <label class="text-xs font-medium text-gray-500 ml-1">备注</label>
+                            <input v-model.trim="securityGroupForm.description" maxlength="128"
+                                placeholder="可选，最多 128 字符" class="w-full glass-input rounded-xl px-4 py-2 text-sm">
+                        </div>
+                    </div>
+
+                    <div class="flex justify-end mt-4">
+                        <button @click="submitSecurityGroupRule"
+                            :disabled="securityGroupSubmitting || securityGroups.length === 0"
+                            class="bg-[#1C1C1E] text-white px-5 py-2.5 rounded-xl text-sm font-bold tap-effect disabled:opacity-50 disabled:cursor-not-allowed">
+                            {{ securityGroupSubmitting ? '提交中...' : '新增入站规则' }}
+                        </button>
+                    </div>
+                </div>
+
+                <div class="flex-1 overflow-y-auto p-6 relative">
+                    <div v-if="securityGroupLoading"
+                        class="absolute inset-0 flex items-center justify-center bg-white/60 z-10">
+                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-800"></div>
+                    </div>
+
+                    <div v-if="securityGroupError"
+                        class="mb-4 rounded-2xl border border-red-200 bg-red-50 text-red-600 px-4 py-3 text-sm">
+                        {{ securityGroupError }}
+                    </div>
+
+                    <div v-if="currentSecurityGroupFallback && currentSecurityGroupDiscoveryMessage"
+                        class="mb-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-700 px-4 py-3 text-sm">
+                        {{ currentSecurityGroupDiscoveryMessage }}
+                    </div>
+
+                    <div v-if="!securityGroupLoading && securityGroups.length === 0"
+                        class="text-sm text-gray-400 text-center py-16">
+                        当前实例未查询到安全组或暂无可展示的入站规则。
+                    </div>
+
+                    <div v-for="group in securityGroups" :key="group.security_group_id"
+                        class="rounded-[28px] border border-white/50 bg-white/50 p-5 mb-5 shadow-sm">
+                        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+                            <div>
+                                <h4 class="text-base font-bold text-[#1C1C1E]">{{ group.security_group_name }}</h4>
+                                <p class="text-xs text-gray-400 font-mono mt-1">{{ group.security_group_id }}</p>
+                                <p v-if="group.description" class="text-xs text-gray-500 mt-1">{{ group.description }}</p>
+                            </div>
+                            <span v-if="group.vpc_id"
+                                class="text-[10px] font-mono text-gray-400 bg-gray-100 px-3 py-1 rounded-full">VPC:
+                                {{ group.vpc_id }}</span>
+                        </div>
+
+                        <div v-if="group.rules.length === 0"
+                            class="text-sm text-gray-400 py-6 text-center border border-dashed border-gray-200 rounded-2xl">
+                            该安全组暂无入站规则
+                        </div>
+
+                        <div v-for="rule in group.rules"
+                            :key="group.security_group_id + '-' + (rule.security_group_rule_id || rule.ip_protocol + rule.port_range + rule.source_display)"
+                            class="rounded-2xl border border-gray-100 bg-white/70 px-4 py-4 mb-3 last:mb-0">
+                            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 flex-1">
+                                    <div>
+                                        <p class="text-[10px] uppercase tracking-wider text-gray-400">协议</p>
+                                        <p class="text-sm font-bold text-[#1C1C1E]">{{ rule.ip_protocol || '-' }}</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-[10px] uppercase tracking-wider text-gray-400">端口</p>
+                                        <p class="text-sm font-bold text-[#1C1C1E]">{{ rule.port_range || '-' }}</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-[10px] uppercase tracking-wider text-gray-400">来源</p>
+                                        <p class="text-sm font-medium text-[#1C1C1E] break-all">{{ rule.source_display }}</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-[10px] uppercase tracking-wider text-gray-400">备注</p>
+                                        <p class="text-sm font-medium text-[#1C1C1E] break-all">{{ rule.description || '-'
+                                            }}</p>
+                                    </div>
+                                </div>
+
+                                <div class="flex items-center gap-3">
+                                    <span class="text-[10px] text-gray-400 font-mono" v-if="rule.security_group_rule_id">{{
+                                        rule.security_group_rule_id }}</span>
+                                    <button v-if="rule.can_manage"
+                                        @click="removeSecurityGroupRule(group.security_group_id, rule)"
+                                        :disabled="securityGroupDeletingKey === (group.security_group_id + ':' + (rule.security_group_rule_id || rule.ip_protocol + rule.port_range + rule.source_display))"
+                                        class="px-3 py-1.5 rounded-lg text-xs font-bold text-red-500 bg-red-50 border border-red-100 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed transition">
+                                        {{
+                                        securityGroupDeletingKey === (group.security_group_id + ':' + (rule.security_group_rule_id ||
+                                        rule.ip_protocol + rule.port_range + rule.source_display)) ? '删除中...' : '删除'
+                                        }}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
 
 
         <div v-if="criticalError"
-            class="fixed inset-0 z-50 flex items-center justify-center p-6 bg-red-50/50 backdrop-blur-sm">
-            <div class="glass-panel w-full max-w-md p-8 rounded-[40px] shadow-xl border-red-200 bg-red-50/80">
+            class="fixed inset-0 z-50 overflow-y-auto p-6 bg-red-50/50 backdrop-blur-sm">
+            <div class="glass-panel w-full max-w-md p-8 rounded-[40px] shadow-xl border-red-200 bg-red-50/80 my-6 mx-auto">
                 <div class="text-center">
                     <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100 mb-4">
                         <svg class="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -355,10 +582,10 @@
             </div>
         </div>
 
-        <div v-if="showLoginModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div v-if="showLoginModal" class="fixed inset-0 z-50 overflow-y-auto p-4">
             <div class="absolute inset-0 bg-gray-200/30 backdrop-blur-md" @click="showLoginModal = false"></div>
             <div
-                class="glass-panel w-full max-w-md p-8 rounded-[40px] relative z-10 transform transition-all shadow-2xl">
+                class="glass-panel w-full max-w-md p-8 rounded-[40px] relative z-10 transform transition-all shadow-2xl my-6 mx-auto">
                 <h2 class="text-2xl font-bold mb-6 text-center">管理员验证</h2>
                 <input type="password" v-model="passwordInput" placeholder="请输入配置密码"
                     class="w-full glass-input px-4 py-3 rounded-xl border border-transparent focus:outline-none transition-all text-center text-lg mb-6">
@@ -368,8 +595,8 @@
         </div>
 
         <div v-if="!initialized && !loadingCheckInit && !criticalError"
-            class="fixed inset-0 z-50 flex flex-col items-center justify-center p-6 bg-[#F2F2F7]">
-            <div class="glass-panel w-full max-w-lg p-10 rounded-[48px] shadow-2xl border border-white/80">
+            class="fixed inset-0 z-50 overflow-y-auto p-6 bg-[#F2F2F7]">
+            <div class="glass-panel w-full max-w-lg p-10 rounded-[48px] shadow-2xl border border-white/80 my-6 mx-auto">
                 <div class="text-center mb-8">
                     <h1 class="text-3xl font-extrabold text-[#1C1C1E] mb-2">欢迎使用 CDT Monitor</h1>
                     <p class="text-gray-500 text-sm">初次使用，请先配置核心参数。</p>
@@ -439,7 +666,7 @@
                                 <p class="text-[10px] text-gray-400 px-2 mt-1">控制更新状态和流量的频率。开关机操作触发时会自动加速至 1 分钟。</p>
                             </div>
 
-                            <div class="space-y-1 relative">
+                            <div v-if="anyAccountSupports('stop_charging')" class="space-y-1 relative">
                                 <div class="flex items-center gap-1">
                                     <label class="text-xs font-medium text-gray-500 ml-2">停机模式</label>
                                     <div class="group relative flex items-center">
@@ -476,7 +703,7 @@
                                 </select>
                             </div>
 
-                            <div class="space-y-1">
+                            <div v-if="anyAccountSupports('traffic_monitor')" class="space-y-1">
                                 <label class="text-xs font-medium text-gray-500 ml-2">流量阈值动作</label>
                                 <select v-model="config.threshold_action"
                                     class="w-full glass-input rounded-xl px-4 py-2 text-sm appearance-none cursor-pointer">
@@ -485,7 +712,7 @@
                                 </select>
                             </div>
 
-                            <div class="flex items-center justify-between pt-2">
+                            <div v-if="anyAccountSupports('schedule_manage')" class="flex items-center justify-between pt-2">
                                 <div class="flex items-center gap-1">
                                     <label class="text-xs font-medium text-gray-500 ml-2">实例保活 (抢占式)</label>
                                     <div class="group relative flex items-center">
@@ -529,7 +756,7 @@
                                 </div>
                             </div>
 
-                            <div class="flex items-center justify-between pt-2">
+                            <div v-if="anyAccountSupports('billing_summary')" class="flex items-center justify-between pt-2">
                                 <div class="flex items-center gap-1">
                                     <label class="text-xs font-medium text-gray-500 ml-2">成本分析 (BSS)</label>
                                     <div class="group relative flex items-center">
@@ -800,6 +1027,14 @@
 
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div class="space-y-1">
+                                        <label class="text-xs font-medium text-gray-500 ml-2">云厂商</label>
+                                        <select v-model="acc.cloudProvider" @change="syncAccountCapabilities(acc)"
+                                            class="w-full glass-input rounded-xl px-4 py-2 text-sm appearance-none cursor-pointer">
+                                            <option value="aliyun">阿里云</option>
+                                            <option value="huaweicloud">华为云</option>
+                                        </select>
+                                    </div>
+                                    <div class="space-y-1">
                                         <label class="text-xs font-medium text-gray-500 ml-2">AccessKey ID</label>
                                         <input v-model="acc.AccessKeyId"
                                             class="w-full glass-input rounded-xl px-4 py-2 text-sm">
@@ -809,23 +1044,40 @@
                                         <input v-model="acc.AccessKeySecret" type="password"
                                             class="w-full glass-input rounded-xl px-4 py-2 text-sm">
                                     </div>
-                                    <div class="space-y-1">
+                                    <div v-if="acc.cloudProvider === 'aliyun' || acc.cloudProvider === 'huaweicloud'" class="space-y-1">
                                         <label class="text-xs font-medium text-gray-500 ml-2">Instance ID</label>
-                                        <input v-model="acc.instanceId" placeholder="实例 ID (必填)"
+                                        <input v-model.trim="acc.instanceId"
+                                            :placeholder="acc.cloudProvider === 'huaweicloud' ? '华为云 ECS Instance ID (必填)' : '实例 ID (必填)'"
                                             class="w-full glass-input rounded-xl px-4 py-2 text-sm">
+                                        <p v-if="acc.cloudProvider === 'huaweicloud'" class="text-[10px] text-gray-400 mt-1 px-1 leading-tight">
+                                            默认按实例自动发现该 ECS 绑定的全部安全组。
+                                        </p>
+                                        <div v-if="acc.cloudProvider === 'huaweicloud' && !acc.instanceId && acc.suggestedInstanceId"
+                                            class="mt-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-3">
+                                            <p class="text-[11px] font-medium text-emerald-700">
+                                                已自动识别实例 {{ acc.suggestedInstanceName || acc.suggestedInstanceId }}
+                                            </p>
+                                            <p class="text-[10px] text-emerald-700/80 font-mono mt-1">
+                                                {{ acc.suggestedInstanceId }}<span v-if="acc.suggestedPublicIp"> | {{ acc.suggestedPublicIp }}</span>
+                                            </p>
+                                            <button @click="applySuggestedInstanceId(acc)"
+                                                class="mt-2 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-emerald-600 text-white hover:bg-emerald-700 transition">
+                                                使用这个 Instance ID
+                                            </button>
+                                        </div>
                                     </div>
                                     <div class="space-y-1 relative">
                                         <label class="text-xs font-medium text-gray-500 ml-2">Region ID</label>
-                                        <input v-model="acc.regionId" @focus="regionSearchFocus = idx"
-                                            @blur="setTimeout(() => regionSearchFocus = -1, 200)"
-                                            placeholder="输入地域名称或代码..."
+                                        <input v-model="acc.regionId" @focus="handleRegionFocus(acc, idx)"
+                                            @blur="handleRegionBlur(acc)"
+                                            :placeholder="getRegionPlaceholder(acc)"
                                             class="w-full glass-input rounded-xl px-4 py-2 text-sm">
 
                                         <transition name="dropdown">
-                                            <div v-show="regionSearchFocus === idx"
+                                            <div v-show="shouldShowRegionDropdown(acc, idx)"
                                                 class="absolute left-0 right-0 top-full mt-2 bg-white/90 backdrop-blur-md border border-gray-200 rounded-xl shadow-xl z-50 max-h-60 overflow-y-auto no-scrollbar">
                                                 <ul>
-                                                    <li v-for="region in aliyunRegions.filter(r => !acc.regionId || r.id.toLowerCase().includes(acc.regionId.toLowerCase()) || r.name.includes(acc.regionId))"
+                                                    <li v-for="region in getRegionSuggestions(acc)"
                                                         @click="acc.regionId = region.id; regionSearchFocus = -1"
                                                         class="px-4 py-2 text-xs hover:bg-gray-100 cursor-pointer border-b border-gray-100/50 last:border-0 flex justify-between items-center group">
                                                         <span class="font-medium text-gray-800">{{ region.name }}</span>
@@ -833,15 +1085,18 @@
                                                             class="text-[10px] text-gray-400 group-hover:text-gray-600 font-mono">{{
                                                             region.id }}</span>
                                                     </li>
-                                                    <li v-if="aliyunRegions.filter(r => !acc.regionId || r.id.toLowerCase().includes(acc.regionId.toLowerCase()) || r.name.includes(acc.regionId)).length === 0"
+                                                    <li v-if="getRegionSuggestions(acc).length === 0"
                                                         class="px-4 py-3 text-xs text-gray-400 text-center">
                                                         无匹配地域
                                                     </li>
                                                 </ul>
                                             </div>
                                         </transition>
+                                        <p v-if="acc.cloudProvider === 'huaweicloud'" class="text-[10px] text-gray-400 mt-1 px-1 leading-tight">
+                                            华为云请直接填写官方 Region ID，例如 `ap-southeast-3`、`cn-north-4`。
+                                        </p>
                                     </div>
-                                    <div class="space-y-1">
+                                    <div v-if="accountSupports(acc, 'traffic_monitor') || acc.cloudProvider === 'huaweicloud'" class="space-y-1">
                                         <label class="text-xs font-medium text-gray-500 ml-2">Max Traffic (GB)</label>
                                         <input v-model.number="acc.maxTraffic" type="number"
                                             class="w-full glass-input rounded-xl px-4 py-2 text-sm">
@@ -849,7 +1104,18 @@
                                 </div>
 
                                 <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div class="space-y-1">
+                                    <div v-if="acc.cloudProvider === 'huaweicloud'" class="space-y-1">
+                                        <label class="text-xs font-medium text-gray-500 ml-2">Project ID</label>
+                                        <input v-model.trim="acc.projectId" placeholder="32位项目 ID"
+                                            class="w-full glass-input rounded-xl px-4 py-2 text-sm font-mono">
+                                    </div>
+                                    <div v-if="acc.cloudProvider === 'huaweicloud'" class="space-y-1">
+                                        <label class="text-xs font-medium text-gray-500 ml-2">兼容安全组 ID <span
+                                                class="text-gray-400">(可选)</span></label>
+                                        <input v-model.trim="acc.securityGroupId" placeholder="仅在实例自动发现失败时回退使用"
+                                            class="w-full glass-input rounded-xl px-4 py-2 text-sm font-mono">
+                                    </div>
+                                    <div v-if="accountSupports(acc, 'site_type_select')" class="space-y-1">
                                         <label class="text-xs font-medium text-gray-500 ml-2">站点类型</label>
                                         <select v-model="acc.siteType"
                                             class="w-full glass-input rounded-xl px-4 py-2 text-sm appearance-none cursor-pointer">
@@ -864,8 +1130,56 @@
                                             class="w-full glass-input rounded-xl px-4 py-2 text-sm">
                                     </div>
                                 </div>
+                                <p v-if="acc.cloudProvider === 'huaweicloud'" class="text-[10px] text-gray-400 mt-3 px-1 leading-tight">
+                                    华为云当前默认按 `Instance ID` 自动发现绑定安全组；若自动发现失败，才会回退到兼容安全组 ID。
+                                </p>
 
-                                <div class="mt-6 pt-4 border-t border-gray-200/50">
+                                <div v-if="accountSupports(acc, 'per_account_proxy')" class="mt-6 pt-4 border-t border-gray-200/50">
+                                    <div class="flex items-center gap-3 mb-3">
+                                        <div class="relative inline-block w-8 mr-1">
+                                            <input type="checkbox" v-model="acc.apiProxy.enabled" :id="'proxy-'+idx"
+                                                class="peer sr-only" />
+                                            <label :for="'proxy-'+idx"
+                                                class="block overflow-hidden h-4 w-8 rounded-full bg-gray-300 cursor-pointer transition-colors peer-checked:bg-[#1C1C1E]"></label>
+                                            <div
+                                                class="absolute left-0.5 top-0.5 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-4">
+                                            </div>
+                                        </div>
+                                        <span class="text-sm font-bold text-gray-700">启用账号级 SOCKS5 代理</span>
+                                    </div>
+
+                                    <div v-if="acc.apiProxy && acc.apiProxy.enabled"
+                                        class="grid grid-cols-1 md:grid-cols-2 gap-4 animate-fade-in">
+                                        <div class="space-y-1">
+                                            <label class="text-xs font-medium text-gray-500 ml-2">SOCKS5 Host</label>
+                                            <input v-model.trim="acc.apiProxy.host" placeholder="127.0.0.1"
+                                                class="w-full glass-input rounded-xl px-4 py-2 text-sm font-mono">
+                                        </div>
+                                        <div class="space-y-1">
+                                            <label class="text-xs font-medium text-gray-500 ml-2">SOCKS5 Port</label>
+                                            <input v-model.trim="acc.apiProxy.port" placeholder="1080"
+                                                class="w-full glass-input rounded-xl px-4 py-2 text-sm font-mono">
+                                        </div>
+                                        <div class="space-y-1">
+                                            <label class="text-xs font-medium text-gray-500 ml-2">用户名 <span
+                                                    class="text-gray-400">(可选)</span></label>
+                                            <input v-model.trim="acc.apiProxy.username" placeholder="留空表示无认证"
+                                                class="w-full glass-input rounded-xl px-4 py-2 text-sm font-mono">
+                                        </div>
+                                        <div class="space-y-1">
+                                            <label class="text-xs font-medium text-gray-500 ml-2">密码 <span
+                                                    class="text-gray-400">(可选)</span></label>
+                                            <input v-model="acc.apiProxy.password" type="password"
+                                                placeholder="留空表示无认证"
+                                                class="w-full glass-input rounded-xl px-4 py-2 text-sm font-mono">
+                                        </div>
+                                    </div>
+                                    <p class="text-[10px] text-gray-400 mt-3 px-1 leading-tight">
+                                        仅当前账号的云 API 请求会走该 SOCKS5 代理。不同云厂商是否支持由该账号能力决定。
+                                    </p>
+                                </div>
+
+                                <div v-if="accountSupports(acc, 'schedule_manage')" class="mt-6 pt-4 border-t border-gray-200/50">
                                     <div class="flex items-center gap-3 mb-3">
                                         <div class="relative inline-block w-8 mr-1">
                                             <input type="checkbox" v-model="acc.schedule.enabled" :id="'sched-'+idx"
@@ -1059,7 +1373,31 @@
                 const currentChartId = ref(0);
                 const currentChartAccount = ref('');
                 let chartInstance = null;
-                let currentChartData = {};
+                const currentChartData = ref({});
+
+                const showSecurityGroupModal = ref(false);
+                const securityGroupLoading = ref(false);
+                const securityGroupSubmitting = ref(false);
+                const securityGroupDeletingKey = ref('');
+                const securityGroupError = ref('');
+                const currentSecurityGroupTargetId = ref(0);
+                const currentSecurityGroupAccount = ref('');
+                const currentSecurityGroupInstanceId = ref('');
+                const currentSecurityGroupInstanceName = ref('');
+                const currentSecurityGroupRegion = ref('');
+                const currentSecurityGroupPublicIp = ref('');
+                const currentSecurityGroupDiscoveryStatus = ref('');
+                const currentSecurityGroupDiscoveryMode = ref('');
+                const currentSecurityGroupDiscoveryMessage = ref('');
+                const currentSecurityGroupFallback = ref(false);
+                const securityGroups = ref([]);
+                const securityGroupForm = ref({
+                    security_group_id: '',
+                    ip_protocol: 'TCP',
+                    port_range: '22/22',
+                    source_cidr_ip: '0.0.0.0/0',
+                    description: ''
+                });
 
 
 
@@ -1091,6 +1429,170 @@
                     { id: 'cn-guangzhou', name: '华南3 (广州)' },
                     { id: 'cn-chengdu', name: '西南1 (成都)' }
                 ];
+
+                const huaweiRegions = [
+                    { id: 'cn-north-4', name: '华北-北京4' },
+                    { id: 'cn-east-3', name: '华东-上海一' },
+                    { id: 'cn-south-1', name: '华南-广州' },
+                    { id: 'cn-southwest-2', name: '西南-贵阳一' },
+                    { id: 'ap-southeast-1', name: '亚太-香港' },
+                    { id: 'ap-southeast-2', name: '亚太-曼谷' },
+                    { id: 'ap-southeast-3', name: '亚太-新加坡' }
+                ];
+
+                const providerMetaMap = {
+                    aliyun: {
+                        label: '阿里云',
+                        trafficLabel: 'CDT 流量',
+                        badgeClass: 'bg-orange-50 text-orange-600 border-orange-200'
+                    },
+                    huaweicloud: {
+                        label: '华为云',
+                        trafficLabel: '公网流量',
+                        badgeClass: 'bg-slate-100 text-slate-600 border-slate-200'
+                    }
+                };
+
+                const providerCapabilityMap = {
+                    aliyun: {
+                        traffic_monitor: true,
+                        security_group_manage: true,
+                        instance_start_stop: true,
+                        stop_charging: true,
+                        billing_summary: true,
+                        schedule_manage: true,
+                        per_account_proxy: true,
+                        site_type_select: true,
+                        region_picker: true
+                    },
+                    huaweicloud: {
+                        traffic_monitor: false,
+                        security_group_manage: true,
+                        instance_start_stop: false,
+                        stop_charging: false,
+                        billing_summary: false,
+                        schedule_manage: false,
+                        per_account_proxy: true,
+                        site_type_select: false,
+                        region_picker: true
+                    }
+                };
+
+                const getProviderMeta = (providerKey = 'aliyun') => providerMetaMap[providerKey] || {
+                    label: providerKey || '未知云',
+                    trafficLabel: '流量',
+                    badgeClass: 'bg-gray-100 text-gray-600 border-gray-200'
+                };
+
+                const getCapabilitiesForProvider = (providerKey = 'aliyun') => ({
+                    ...(providerCapabilityMap[providerKey] || {})
+                });
+
+                const syncAccountCapabilities = (account) => {
+                    if (!account) return;
+                    account.capabilities = getCapabilitiesForProvider(account.cloudProvider);
+                };
+
+                const applySuggestedInstanceId = (account) => {
+                    if (!account?.suggestedInstanceId) return;
+                    account.instanceId = account.suggestedInstanceId;
+                };
+
+                const itemSupports = (item, capability) => {
+                    const capabilities = item?.capabilities || getCapabilitiesForProvider(item?.cloudProvider);
+                    return !!capabilities?.[capability];
+                };
+
+                const accountSupports = (account, capability) => {
+                    const capabilities = account?.capabilities || getCapabilitiesForProvider(account?.cloudProvider);
+                    return !!capabilities?.[capability];
+                };
+
+                const anyAccountSupports = (capability) => {
+                    const accounts = config.value?.Accounts || [];
+                    if (accounts.length === 0) return true;
+                    return accounts.some(account => accountSupports(account, capability));
+                };
+
+                const getRegionSuggestions = (account) => {
+                    if (!account) {
+                        return [];
+                    }
+
+                    const regions = account.cloudProvider === 'huaweicloud' ? huaweiRegions : (account.cloudProvider === 'aliyun' ? aliyunRegions : []);
+                    if (regions.length === 0) return [];
+
+                    return regions.filter(region =>
+                        !account.regionId ||
+                        region.id.toLowerCase().includes(account.regionId.toLowerCase()) ||
+                        region.name.includes(account.regionId)
+                    );
+                };
+
+                const shouldShowRegionDropdown = (account, index) => {
+                    return accountSupports(account, 'region_picker') && regionSearchFocus.value === index;
+                };
+
+                const handleRegionFocus = (account, index) => {
+                    regionSearchFocus.value = accountSupports(account, 'region_picker') ? index : -1;
+                };
+
+                const handleRegionBlur = (account) => {
+                    if (accountSupports(account, 'region_picker')) {
+                        setTimeout(() => regionSearchFocus.value = -1, 200);
+                    } else {
+                        regionSearchFocus.value = -1;
+                    }
+                };
+
+                const getRegionPlaceholder = (account) => {
+                    return account?.cloudProvider === 'huaweicloud'
+                        ? '手动输入华为云 Region ID...'
+                        : '输入地域名称或代码...';
+                };
+
+                const getProviderLabel = (providerKey) => getProviderMeta(providerKey).label;
+                const getTrafficLabel = (item) => getProviderMeta(item?.cloudProvider).trafficLabel;
+                const getProviderBadgeClass = (providerKey) => getProviderMeta(providerKey).badgeClass;
+                const canShowChart = (item) => itemSupports(item, 'traffic_monitor') && (item?.cloudProvider !== 'huaweicloud' || !!item?.trafficDataAvailable);
+                const shouldUsePrimaryMetricCard = (item) => itemSupports(item, 'traffic_monitor') || item?.cloudProvider === 'huaweicloud';
+                const getPrimaryMetricValue = (item) => item?.primaryMetricValueText ?? (item?.cloudProvider === 'huaweicloud' ? (item?.securityGroupCount ?? 0) : item?.flow_used);
+                const getPrimaryMetricUnit = (item) => item?.primaryMetricUnit ?? (item?.cloudProvider === 'huaweicloud' ? '组' : 'GB');
+                const getPrimaryMetricLabel = (item) => item?.primaryMetricLabel || getTrafficLabel(item);
+                const getPrimaryMetricSummary = (item) => {
+                    if (item?.cloudProvider === 'huaweicloud') {
+                        if (item?.trafficDataAvailable) {
+                            return `${item?.percentageOfUse ?? 0}% / ${item?.flow_total ?? 0}G`;
+                        }
+                        return `Max ${item?.flow_total ?? 0}G`;
+                    }
+                    return `${item?.percentageOfUse ?? 0}% / ${item?.flow_total ?? 0}G`;
+                };
+                const getHuaweiInstanceTitle = (item) => item?.instanceName || item?.instanceId || '未绑定实例';
+                const getHuaweiDiscoveryLabel = (item) => {
+                    if (item?.discoveryStatus === 'success') return '实例发现';
+                    if (item?.discoveryStatus === 'fallback') return '兼容 SG';
+                    if (item?.discoveryStatus === 'incomplete') return '配置待升级';
+                    if (item?.usingFallbackSecurityGroup || item?.discoveryMode === 'security_group_fallback') return '兼容 SG';
+                    return '发现失败';
+                };
+                const getHuaweiDiscoveryBadgeClass = (item) => {
+                    if (item?.discoveryStatus === 'success') return 'bg-emerald-50 text-emerald-600 border-emerald-200';
+                    if (item?.discoveryStatus === 'fallback') return 'bg-amber-50 text-amber-700 border-amber-200';
+                    if (item?.discoveryStatus === 'incomplete') return 'bg-orange-50 text-orange-600 border-orange-200';
+                    return 'bg-gray-100 text-gray-500 border-gray-200';
+                };
+                const getCardIndicatorClass = (item) => {
+                    if (item?.cloudProvider === 'huaweicloud') {
+                        if (item?.discoveryStatus === 'success') return 'bg-green-500 shadow-[0_0_10px_rgba(52,199,89,0.5)]';
+                        if (item?.discoveryStatus === 'fallback') return 'bg-yellow-500 shadow-[0_0_10px_rgba(245,158,11,0.45)]';
+                        if (item?.discoveryStatus === 'incomplete') return 'bg-orange-400 shadow-[0_0_10px_rgba(251,146,60,0.35)]';
+                        return 'bg-gray-300 shadow-[0_0_10px_rgba(156,163,175,0.35)]';
+                    }
+                    return item?.rate95
+                        ? 'bg-red-500 shadow-[0_0_10px_rgba(255,59,48,0.5)]'
+                        : 'bg-green-500 shadow-[0_0_10px_rgba(52,199,89,0.5)]';
+                };
 
                 const setupData = ref({
                     admin_password: '',
@@ -1215,6 +1717,194 @@
                     }
                 };
 
+                const ensureSecurityGroupSelection = () => {
+                    if (securityGroups.value.length === 0) {
+                        securityGroupForm.value.security_group_id = '';
+                        return;
+                    }
+
+                    const exists = securityGroups.value.some(group => group.security_group_id === securityGroupForm.value.security_group_id);
+                    if (!exists) {
+                        securityGroupForm.value.security_group_id = securityGroups.value[0].security_group_id;
+                    }
+                };
+
+                const syncSecurityGroupPortRange = () => {
+                    if (securityGroupForm.value.ip_protocol === 'TCP' || securityGroupForm.value.ip_protocol === 'UDP') {
+                        if (securityGroupForm.value.port_range === '-1/-1') {
+                            securityGroupForm.value.port_range = '22/22';
+                        }
+                    } else {
+                        securityGroupForm.value.port_range = '-1/-1';
+                    }
+                };
+
+                const applySecurityGroupPreset = (protocol, portRange, sourceCidrIp = '0.0.0.0/0') => {
+                    securityGroupForm.value.ip_protocol = protocol;
+                    securityGroupForm.value.port_range = portRange;
+                    securityGroupForm.value.source_cidr_ip = sourceCidrIp;
+                };
+
+                const loadSecurityGroups = async () => {
+                    if (!currentSecurityGroupTargetId.value) return;
+
+                    securityGroupLoading.value = true;
+                    securityGroupError.value = '';
+
+                    try {
+                        const res = await fetch(`index.php?action=get_security_groups&id=${currentSecurityGroupTargetId.value}`);
+                        const data = await res.json();
+                        const payload = data.data || {};
+
+                        currentSecurityGroupInstanceId.value = payload.instance_id || '';
+                        currentSecurityGroupInstanceName.value = payload.instance_name || '';
+                        currentSecurityGroupRegion.value = payload.region_id || '';
+                        currentSecurityGroupPublicIp.value = payload.public_ip || '';
+                        currentSecurityGroupDiscoveryStatus.value = payload.discovery_status || '';
+                        currentSecurityGroupDiscoveryMode.value = payload.discovery_mode || '';
+                        currentSecurityGroupDiscoveryMessage.value = payload.discovery_message || '';
+                        currentSecurityGroupFallback.value = !!payload.using_fallback_security_group;
+
+                        if (data.success) {
+                            securityGroups.value = payload.security_groups || [];
+                            ensureSecurityGroupSelection();
+                        } else {
+                            securityGroups.value = [];
+                            securityGroupError.value = data.message || '安全组加载失败';
+                        }
+                    } catch (e) {
+                        console.error(e);
+                        securityGroups.value = [];
+                        securityGroupError.value = '安全组加载失败，请检查网络连接';
+                    } finally {
+                        securityGroupLoading.value = false;
+                    }
+                };
+
+                const openSecurityGroupModal = async (item) => {
+                    currentSecurityGroupTargetId.value = item.id;
+                    currentSecurityGroupAccount.value = item.account;
+                    currentSecurityGroupInstanceId.value = item.instanceId || '';
+                    currentSecurityGroupInstanceName.value = item.instanceName || '';
+                    currentSecurityGroupRegion.value = item.region || '';
+                    currentSecurityGroupPublicIp.value = item.publicIp || '';
+                    currentSecurityGroupDiscoveryStatus.value = item.discoveryStatus || '';
+                    currentSecurityGroupDiscoveryMode.value = item.discoveryMode || '';
+                    currentSecurityGroupDiscoveryMessage.value = item.discoveryMessage || '';
+                    currentSecurityGroupFallback.value = !!item.usingFallbackSecurityGroup;
+                    securityGroups.value = [];
+                    securityGroupError.value = '';
+                    securityGroupForm.value = {
+                        security_group_id: '',
+                        ip_protocol: 'TCP',
+                        port_range: '22/22',
+                        source_cidr_ip: '0.0.0.0/0',
+                        description: ''
+                    };
+                    showSecurityGroupModal.value = true;
+                    await loadSecurityGroups();
+                };
+
+                const closeSecurityGroupModal = () => {
+                    showSecurityGroupModal.value = false;
+                    securityGroupLoading.value = false;
+                    securityGroupSubmitting.value = false;
+                    securityGroupDeletingKey.value = '';
+                    securityGroupError.value = '';
+                    currentSecurityGroupTargetId.value = 0;
+                    currentSecurityGroupAccount.value = '';
+                    currentSecurityGroupInstanceId.value = '';
+                    currentSecurityGroupInstanceName.value = '';
+                    currentSecurityGroupRegion.value = '';
+                    currentSecurityGroupPublicIp.value = '';
+                    currentSecurityGroupDiscoveryStatus.value = '';
+                    currentSecurityGroupDiscoveryMode.value = '';
+                    currentSecurityGroupDiscoveryMessage.value = '';
+                    currentSecurityGroupFallback.value = false;
+                    securityGroups.value = [];
+                };
+
+                const submitSecurityGroupRule = async () => {
+                    if (!currentSecurityGroupTargetId.value) return;
+
+                    securityGroupSubmitting.value = true;
+                    securityGroupError.value = '';
+
+                    try {
+                        const res = await fetch('index.php?action=add_security_group_rule', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                id: currentSecurityGroupTargetId.value,
+                                security_group_id: securityGroupForm.value.security_group_id,
+                                ip_protocol: securityGroupForm.value.ip_protocol,
+                                port_range: securityGroupForm.value.port_range,
+                                source_cidr_ip: securityGroupForm.value.source_cidr_ip,
+                                description: securityGroupForm.value.description
+                            })
+                        });
+                        const data = await res.json();
+
+                        if (data.success) {
+                            securityGroupForm.value.description = '';
+                            await loadSecurityGroups();
+                            alert(data.message || '规则已添加');
+                        } else {
+                            securityGroupError.value = data.message || '新增规则失败';
+                        }
+                    } catch (e) {
+                        console.error(e);
+                        securityGroupError.value = '新增规则失败，请检查网络连接';
+                    } finally {
+                        securityGroupSubmitting.value = false;
+                    }
+                };
+
+                const removeSecurityGroupRule = async (securityGroupId, rule) => {
+                    const ruleKey = `${securityGroupId}:${rule.security_group_rule_id || rule.ip_protocol + rule.port_range + rule.source_display}`;
+                    if (!confirm(`确定删除规则 ${rule.ip_protocol} ${rule.port_range} <- ${rule.source_display} 吗？`)) {
+                        return;
+                    }
+
+                    securityGroupDeletingKey.value = ruleKey;
+                    securityGroupError.value = '';
+
+                    try {
+                        const res = await fetch('index.php?action=delete_security_group_rule', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                id: currentSecurityGroupTargetId.value,
+                                security_group_id: securityGroupId,
+                                security_group_rule_id: rule.security_group_rule_id,
+                                ip_protocol: rule.ip_protocol,
+                                port_range: rule.port_range,
+                                source_cidr_ip: rule.source_cidr_ip,
+                                source_group_id: rule.source_group_id,
+                                source_prefix_list_id: rule.source_prefix_list_id,
+                                policy: rule.policy,
+                                nic_type: rule.nic_type
+                            })
+                        });
+                        const data = await res.json();
+
+                        if (data.success) {
+                            await loadSecurityGroups();
+                        } else {
+                            securityGroupError.value = data.message || '删除规则失败';
+                        }
+                    } catch (e) {
+                        console.error(e);
+                        securityGroupError.value = '删除规则失败，请检查网络连接';
+                    } finally {
+                        securityGroupDeletingKey.value = '';
+                    }
+                };
+
                 const toggleInstance = async (id, action, index) => {
                     const actionText = action === 'Start' ? '开机' : '关机';
 
@@ -1291,12 +1981,16 @@
                             loadECharts()
                         ]);
                         const json = await res.json();
-                        currentChartData = json.data || {};
+                        currentChartData.value = json.data || {};
 
                         setTimeout(() => {
                             initChart();
                             renderChart();
+                            if (chartInstance) chartInstance.resize();
                             chartLoading.value = false;
+                            requestAnimationFrame(() => {
+                                if (chartInstance) chartInstance.resize();
+                            });
                         }, 100);
 
                     } catch (e) {
@@ -1307,6 +2001,7 @@
 
                 const initChart = () => {
                     const dom = document.getElementById('echarts-container');
+                    if (!dom) return;
                     if (chartInstance) {
                         chartInstance.dispose();
                     }
@@ -1321,9 +2016,9 @@
 
                 const isChartEmpty = computed(() => {
                     if (chartMode.value === '24h') {
-                        return !currentChartData.history_24h || currentChartData.history_24h.length === 0;
+                        return !currentChartData.value.history_24h || currentChartData.value.history_24h.length === 0;
                     } else {
-                        return !currentChartData.history_30d || currentChartData.history_30d.length === 0;
+                        return !currentChartData.value.history_30d || currentChartData.value.history_30d.length === 0;
                     }
                 });
 
@@ -1335,14 +2030,14 @@
                     let is30d = chartMode.value === '30d';
 
                     if (is30d) {
-                        if (currentChartData.history_30d) {
-                            xData = currentChartData.history_30d.map(i => i.date);
-                            sData = currentChartData.history_30d.map(i => i.value);
+                        if (currentChartData.value.history_30d) {
+                            xData = currentChartData.value.history_30d.map(i => i.date);
+                            sData = currentChartData.value.history_30d.map(i => i.value);
                         }
                     } else {
-                        if (currentChartData.history_24h) {
-                            xData = currentChartData.history_24h.map(i => i.time);
-                            sData = currentChartData.history_24h.map(i => i.value);
+                        if (currentChartData.value.history_24h) {
+                            xData = currentChartData.value.history_24h.map(i => i.time);
+                            sData = currentChartData.value.history_24h.map(i => i.value);
                         }
                     }
 
@@ -1460,10 +2155,27 @@
                         const data = await res.json();
                         if (!data.Accounts) data.Accounts = [];
                         data.Accounts.forEach(acc => {
+                            if (typeof acc.cloudProvider === 'undefined') acc.cloudProvider = 'aliyun';
+                            if (typeof acc.instanceId === 'undefined') acc.instanceId = '';
+                            if (typeof acc.projectId === 'undefined') acc.projectId = '';
+                            if (typeof acc.securityGroupId === 'undefined') acc.securityGroupId = '';
+                            if (typeof acc.suggestedInstanceId === 'undefined') acc.suggestedInstanceId = '';
+                            if (typeof acc.suggestedInstanceName === 'undefined') acc.suggestedInstanceName = '';
+                            if (typeof acc.suggestedPublicIp === 'undefined') acc.suggestedPublicIp = '';
                             if (!acc.schedule) acc.schedule = { enabled: false, startTime: '', stopTime: '' };
                             if (typeof acc.maxTraffic === 'undefined') acc.maxTraffic = 200;
                             if (typeof acc.remark === 'undefined') acc.remark = '';
                             if (typeof acc.siteType === 'undefined') acc.siteType = 'china';
+                            if (!acc.apiProxy) {
+                                acc.apiProxy = { enabled: false, host: '', port: '', username: '', password: '' };
+                            } else {
+                                if (typeof acc.apiProxy.enabled === 'undefined') acc.apiProxy.enabled = false;
+                                if (typeof acc.apiProxy.host === 'undefined') acc.apiProxy.host = '';
+                                if (typeof acc.apiProxy.port === 'undefined') acc.apiProxy.port = '';
+                                if (typeof acc.apiProxy.username === 'undefined') acc.apiProxy.username = '';
+                                if (typeof acc.apiProxy.password === 'undefined') acc.apiProxy.password = '';
+                            }
+                            syncAccountCapabilities(acc);
                         });
 
                         if (!data.Notification) {
@@ -1497,7 +2209,7 @@
                     try {
                         const res = await fetch('index.php?action=save_config', { method: 'POST', body: JSON.stringify(config.value) });
                         const data = await res.json();
-                        if (data.success) { alert('配置已保存'); fetchData(); } else { alert('保存失败'); }
+                        if (data.success) { alert('配置已保存'); fetchData(); } else { alert(data.message || '保存失败'); }
                     } catch (e) { alert('保存请求失败'); }
                 };
 
@@ -1576,7 +2288,21 @@
 
                 const addAccount = () => {
                     if (!config.value.Accounts) config.value.Accounts = [];
-                    config.value.Accounts.push({ AccessKeyId: '', AccessKeySecret: '', maxTraffic: 200, regionId: '', instanceId: '', remark: '', siteType: 'china', schedule: { enabled: false, startTime: '', stopTime: '' } });
+                    config.value.Accounts.push({
+                        cloudProvider: 'aliyun',
+                        capabilities: getCapabilitiesForProvider('aliyun'),
+                        AccessKeyId: '',
+                        AccessKeySecret: '',
+                        maxTraffic: 200,
+                        regionId: '',
+                        instanceId: '',
+                        projectId: '',
+                        securityGroupId: '',
+                        remark: '',
+                        siteType: 'china',
+                        apiProxy: { enabled: false, host: '', port: '', username: '', password: '' },
+                        schedule: { enabled: false, startTime: '', stopTime: '' }
+                    });
                 };
 
                 const removeAccount = (index) => { if (confirm('确定删除该账号配置？')) config.value.Accounts.splice(index, 1); };
@@ -1598,6 +2324,17 @@
                     statusData, loading, isAdmin, checkingLogin, showLoginModal, passwordInput, config, initialized, loadingCheckInit, setupData, criticalError,
                     regionSearchFocus, aliyunRegions, refreshingMap, systemLogs, cronWarning,
                     showChartModal, chartLoading, chartMode, currentChartAccount, openChart, closeChart, switchChartMode, isChartEmpty,
+                    showSecurityGroupModal, securityGroupLoading, securityGroupSubmitting, securityGroupDeletingKey, securityGroupError,
+                    currentSecurityGroupAccount, currentSecurityGroupInstanceId, currentSecurityGroupInstanceName, currentSecurityGroupRegion, currentSecurityGroupPublicIp,
+                    currentSecurityGroupDiscoveryStatus, currentSecurityGroupDiscoveryMode, currentSecurityGroupDiscoveryMessage, currentSecurityGroupFallback,
+                    securityGroups, securityGroupForm,
+                    openSecurityGroupModal, closeSecurityGroupModal, applySecurityGroupPreset, submitSecurityGroupRule, removeSecurityGroupRule, syncSecurityGroupPortRange,
+                    itemSupports, accountSupports, anyAccountSupports, syncAccountCapabilities, getProviderLabel, getTrafficLabel, getProviderBadgeClass,
+                    canShowChart,
+                    shouldUsePrimaryMetricCard, getPrimaryMetricValue, getPrimaryMetricUnit, getPrimaryMetricLabel, getPrimaryMetricSummary,
+                    getHuaweiInstanceTitle, getHuaweiDiscoveryLabel, getHuaweiDiscoveryBadgeClass, getCardIndicatorClass,
+                    applySuggestedInstanceId,
+                    getRegionSuggestions, shouldShowRegionDropdown, handleRegionFocus, handleRegionBlur, getRegionPlaceholder,
                     isOperatingMap,
                     toggleInstance,
                     toggleAdmin, performLogin, saveConfig, sendTestEmail, sendingEmail, addAccount, removeAccount, getInstanceStatusColor, performSetup, refreshSingle, fetchLogs,

@@ -6,6 +6,114 @@ use AlibabaCloud\Client\Exception\ServerException;
 
 class AliyunService
 {
+    private function getAccountProxyCacheKey($account)
+    {
+        return implode('|', [
+            $account['access_key_id'] ?? '',
+            $account['region_id'] ?? '',
+            $account['instance_id'] ?? '',
+            $account['site_type'] ?? '',
+            $account['api_proxy_enabled'] ?? 0,
+            $account['api_proxy_host'] ?? '',
+            $account['api_proxy_port'] ?? '',
+            $account['api_proxy_user'] ?? '',
+            $account['api_proxy_pass'] ?? ''
+        ]);
+    }
+
+    private function buildProxyOptions($account)
+    {
+        if (($account['api_proxy_enabled'] ?? 0) != 1) {
+            return [];
+        }
+
+        $host = trim((string) ($account['api_proxy_host'] ?? ''));
+        $port = trim((string) ($account['api_proxy_port'] ?? ''));
+        $username = (string) ($account['api_proxy_user'] ?? '');
+        $password = (string) ($account['api_proxy_pass'] ?? '');
+
+        if ($host === '' || $port === '') {
+            throw new \Exception('SOCKS5 代理未完整配置');
+        }
+
+        if (!ctype_digit($port) || (int) $port < 1 || (int) $port > 65535) {
+            throw new \Exception('SOCKS5 代理端口无效');
+        }
+
+        $curlOptions = [
+            CURLOPT_PROXY => $host . ':' . $port,
+            CURLOPT_PROXYTYPE => CURLPROXY_SOCKS5_HOSTNAME,
+        ];
+
+        if ($username !== '' || $password !== '') {
+            $curlOptions[CURLOPT_PROXYUSERPWD] = $username . ':' . $password;
+        }
+
+        return [
+            'curl' => $curlOptions,
+        ];
+    }
+
+    private function buildRequestOptions($account, $query = [], $timeout = 10.0)
+    {
+        $options = [
+            'connect_timeout' => 5.0,
+            'timeout' => $timeout
+        ];
+
+        if (!empty($query)) {
+            $options['query'] = $query;
+        }
+
+        return array_replace_recursive($options, $this->buildProxyOptions($account));
+    }
+
+    private function initAccessKeyClient($key, $secret, $regionId)
+    {
+        AlibabaCloud::accessKeyClient($key, $secret)
+            ->regionId($regionId)
+            ->asDefaultClient();
+    }
+
+    private function normalizeApiList($value)
+    {
+        if ($value === null || $value === '') {
+            return [];
+        }
+
+        if (!is_array($value)) {
+            return [$value];
+        }
+
+        if (empty($value)) {
+            return [];
+        }
+
+        $keys = array_keys($value);
+        $isSequential = $keys === range(0, count($value) - 1);
+        return $isSequential ? $value : [$value];
+    }
+
+    private function initEcsClient($account)
+    {
+        $this->initAccessKeyClient($account['access_key_id'], $account['access_key_secret'], $account['region_id']);
+    }
+
+    private function requestEcs($account, $action, $query = [], $timeout = 10.0)
+    {
+        $this->initEcsClient($account);
+
+        return AlibabaCloud::rpc()
+            ->product('Ecs')
+            ->scheme('https')
+            ->version('2014-05-26')
+            ->action($action)
+            ->method('POST')
+            ->host("ecs.{$account['region_id']}.aliyuncs.com")
+            ->options($this->buildRequestOptions($account, $query, $timeout))
+            ->request();
+    }
+
     /**
      * 智能重试执行器
      * 自动处理网络抖动、超时和服务端临时错误
@@ -109,23 +217,19 @@ class AliyunService
 
     /**
      * 获取 CDT 流量
-     * @param string $key AccessKey
-     * @param string $secret Secret
-     * @param string $targetRegion 目标实例的区域ID
+     * @param array $account 账户配置
      * @throws \Exception
      */
-    public function getTraffic($key, $secret, $targetRegion)
+    public function getTraffic($account)
     {
         // 1. 检查缓存
-        $cacheKey = md5($key);
+        $cacheKey = md5($this->getAccountProxyCacheKey($account));
         if (isset($this->trafficCache[$cacheKey])) {
             $result = $this->trafficCache[$cacheKey];
         } else {
             // 2. 如果无缓存，发起 API 请求
-            $result = $this->executeWithRetry(function () use ($key, $secret) {
-                AlibabaCloud::accessKeyClient($key, $secret)
-                    ->regionId('cn-hongkong') // CDT 接口通常用 cn-hongkong 或 cn-hangzhou 调用即可获取全局数据
-                    ->asDefaultClient();
+            $result = $this->executeWithRetry(function () use ($account) {
+                $this->initAccessKeyClient($account['access_key_id'], $account['access_key_secret'], 'cn-hongkong');
 
                 return AlibabaCloud::rpc()
                     ->product('CDT')
@@ -134,10 +238,7 @@ class AliyunService
                     ->action('ListCdtInternetTraffic')
                     ->method('POST')
                     ->host('cdt.aliyuncs.com')
-                    ->options([
-                        'connect_timeout' => 5.0,
-                        'timeout' => 10.0
-                    ])
+                    ->options($this->buildRequestOptions($account, [], 10.0))
                     ->request();
             }, 'getTraffic');
 
@@ -146,7 +247,7 @@ class AliyunService
         }
 
         if (isset($result['TrafficDetails'])) {
-            $isTargetOverseas = $this->isOverseas($targetRegion);
+            $isTargetOverseas = $this->isOverseas($account['region_id']);
             $totalTraffic = 0;
 
             foreach ($result['TrafficDetails'] as $detail) {
@@ -171,30 +272,13 @@ class AliyunService
     public function getInstanceStatus($account)
     {
         return $this->executeWithRetry(function () use ($account) {
-            AlibabaCloud::accessKeyClient($account['access_key_id'], $account['access_key_secret'])
-                ->regionId($account['region_id'])
-                ->asDefaultClient();
-
-            $options = [
-                'query' => ['RegionId' => $account['region_id']],
-                // 优化点3: 同样缩短实例状态查询的超时
-                'connect_timeout' => 5.0,
-                'timeout' => 10.0
-            ];
+            $query = ['RegionId' => $account['region_id']];
 
             if (!empty($account['instance_id'])) {
-                $options['query']['InstanceId'] = $account['instance_id'];
+                $query['InstanceId'] = $account['instance_id'];
             }
 
-            $result = AlibabaCloud::rpc()
-                ->product('Ecs')
-                ->scheme('https')
-                ->version('2014-05-26')
-                ->action('DescribeInstanceStatus')
-                ->method('POST')
-                ->host("ecs.{$account['region_id']}.aliyuncs.com")
-                ->options($options)
-                ->request();
+            $result = $this->requestEcs($account, 'DescribeInstanceStatus', $query, 10.0);
 
             if (isset($result['InstanceStatuses']['InstanceStatus'][0]['Status'])) {
                 return $result['InstanceStatuses']['InstanceStatus'][0]['Status'];
@@ -211,40 +295,166 @@ class AliyunService
     public function controlInstance($account, $action, $shutdownMode = 'KeepCharging')
     {
         return $this->executeWithRetry(function () use ($account, $action, $shutdownMode) {
-            AlibabaCloud::accessKeyClient($account['access_key_id'], $account['access_key_secret'])
-                ->regionId($account['region_id'])
-                ->asDefaultClient();
-
             if (empty($account['instance_id'])) {
                 throw new \Exception("未配置 Instance ID");
             }
 
-            $options = [
-                'query' => [
-                    'RegionId' => $account['region_id'],
-                    'InstanceId' => $account['instance_id']
-                ],
-                // 优化点4: 控制操作保持一致，确保用户操作不卡死
-                'connect_timeout' => 5.0,
-                'timeout' => 10.0
+            $query = [
+                'RegionId' => $account['region_id'],
+                'InstanceId' => $account['instance_id']
             ];
 
             if ($action === 'stop') {
-                $options['query']['StoppedMode'] = $shutdownMode;
+                $query['StoppedMode'] = $shutdownMode;
             }
 
-            AlibabaCloud::rpc()
-                ->product('Ecs')
-                ->scheme('https')
-                ->version('2014-05-26')
-                ->action($action === 'stop' ? 'StopInstance' : 'StartInstance')
-                ->method('POST')
-                ->host("ecs.{$account['region_id']}.aliyuncs.com")
-                ->options($options)
-                ->request();
+            $this->requestEcs($account, $action === 'stop' ? 'StopInstance' : 'StartInstance', $query, 10.0);
 
             return true;
         }, 'controlInstance');
+    }
+
+    public function getInstanceSecurityGroups($account)
+    {
+        return $this->executeWithRetry(function () use ($account) {
+            if (empty($account['instance_id'])) {
+                throw new \Exception("未配置 Instance ID");
+            }
+
+            $instance = $this->requestEcs($account, 'DescribeInstanceAttribute', [
+                'RegionId' => $account['region_id'],
+                'InstanceId' => $account['instance_id']
+            ], 10.0);
+
+            $securityGroupIds = $this->normalizeApiList($instance['SecurityGroupIds']['SecurityGroupId'] ?? []);
+            $groups = [];
+
+            foreach ($securityGroupIds as $securityGroupId) {
+                $detail = $this->requestEcs($account, 'DescribeSecurityGroupAttribute', [
+                    'RegionId' => $account['region_id'],
+                    'SecurityGroupId' => $securityGroupId,
+                    'NicType' => 'intranet',
+                    'Direction' => 'ingress',
+                    'MaxResults' => 1000
+                ], 10.0);
+
+                $permissions = $this->normalizeApiList($detail['Permissions']['Permission'] ?? []);
+                $rules = [];
+
+                foreach ($permissions as $permission) {
+                    $sourceDisplay = $permission['SourceCidrIp'] ?? '';
+                    if (!$sourceDisplay && !empty($permission['Ipv6SourceCidrIp'])) {
+                        $sourceDisplay = $permission['Ipv6SourceCidrIp'];
+                    }
+                    if (!$sourceDisplay && !empty($permission['SourceGroupId'])) {
+                        $sourceDisplay = '安全组: ' . $permission['SourceGroupId'];
+                    }
+                    if (!$sourceDisplay && !empty($permission['SourcePrefixListId'])) {
+                        $sourceDisplay = '前缀列表: ' . $permission['SourcePrefixListId'];
+                    }
+                    if (!$sourceDisplay) {
+                        $sourceDisplay = '未识别来源';
+                    }
+
+                    $rules[] = [
+                        'security_group_rule_id' => $permission['SecurityGroupRuleId'] ?? '',
+                        'direction' => $permission['Direction'] ?? 'ingress',
+                        'ip_protocol' => strtoupper($permission['IpProtocol'] ?? ''),
+                        'port_range' => $permission['PortRange'] ?? '',
+                        'source_cidr_ip' => $permission['SourceCidrIp'] ?? '',
+                        'ipv6_source_cidr_ip' => $permission['Ipv6SourceCidrIp'] ?? '',
+                        'source_group_id' => $permission['SourceGroupId'] ?? '',
+                        'source_prefix_list_id' => $permission['SourcePrefixListId'] ?? '',
+                        'policy' => $permission['Policy'] ?? '',
+                        'priority' => $permission['Priority'] ?? '',
+                        'nic_type' => $permission['NicType'] ?? '',
+                        'description' => $permission['Description'] ?? '',
+                        'source_display' => $sourceDisplay,
+                        'can_manage' => !empty($permission['SecurityGroupRuleId']) || !empty($permission['SourceCidrIp']) || !empty($permission['SourceGroupId']) || !empty($permission['SourcePrefixListId'])
+                    ];
+                }
+
+                usort($rules, function ($a, $b) {
+                    return strcmp(
+                        $a['ip_protocol'] . '|' . $a['port_range'] . '|' . $a['source_display'],
+                        $b['ip_protocol'] . '|' . $b['port_range'] . '|' . $b['source_display']
+                    );
+                });
+
+                $groups[] = [
+                    'security_group_id' => $securityGroupId,
+                    'security_group_name' => $detail['SecurityGroupName'] ?? $securityGroupId,
+                    'description' => $detail['Description'] ?? '',
+                    'vpc_id' => $detail['VpcId'] ?? '',
+                    'rules' => $rules
+                ];
+            }
+
+            return $groups;
+        }, 'getInstanceSecurityGroups');
+    }
+
+    public function addSecurityGroupRule($account, $securityGroupId, $rule)
+    {
+        return $this->executeWithRetry(function () use ($account, $securityGroupId, $rule) {
+            if (empty($securityGroupId)) {
+                throw new \Exception("缺少安全组 ID");
+            }
+
+            $query = [
+                'RegionId' => $account['region_id'],
+                'SecurityGroupId' => $securityGroupId,
+                'Permissions.1.IpProtocol' => $rule['ip_protocol'],
+                'Permissions.1.PortRange' => $rule['port_range'],
+                'Permissions.1.SourceCidrIp' => $rule['source_cidr_ip'],
+                'Permissions.1.Policy' => 'accept',
+                'Permissions.1.Priority' => '1',
+                'Permissions.1.NicType' => 'intranet'
+            ];
+
+            if (!empty($rule['description'])) {
+                $query['Permissions.1.Description'] = $rule['description'];
+            }
+
+            $this->requestEcs($account, 'AuthorizeSecurityGroup', $query, 10.0);
+            return true;
+        }, 'addSecurityGroupRule');
+    }
+
+    public function deleteSecurityGroupRule($account, $securityGroupId, $rule)
+    {
+        return $this->executeWithRetry(function () use ($account, $securityGroupId, $rule) {
+            if (empty($securityGroupId)) {
+                throw new \Exception("缺少安全组 ID");
+            }
+
+            $query = [
+                'RegionId' => $account['region_id'],
+                'SecurityGroupId' => $securityGroupId
+            ];
+
+            if (!empty($rule['security_group_rule_id'])) {
+                $query['SecurityGroupRuleId.1'] = $rule['security_group_rule_id'];
+            } else {
+                $query['Permissions.1.IpProtocol'] = strtoupper($rule['ip_protocol'] ?? '');
+                $query['Permissions.1.PortRange'] = $rule['port_range'] ?? '';
+                $query['Permissions.1.Policy'] = strtolower($rule['policy'] ?? 'accept');
+                $query['Permissions.1.NicType'] = $rule['nic_type'] ?? 'intranet';
+
+                if (!empty($rule['source_cidr_ip'])) {
+                    $query['Permissions.1.SourceCidrIp'] = $rule['source_cidr_ip'];
+                } elseif (!empty($rule['source_group_id'])) {
+                    $query['Permissions.1.SourceGroupId'] = $rule['source_group_id'];
+                } elseif (!empty($rule['source_prefix_list_id'])) {
+                    $query['Permissions.1.SourcePrefixListId'] = $rule['source_prefix_list_id'];
+                } else {
+                    throw new \Exception("缺少可删除的规则标识");
+                }
+            }
+
+            $this->requestEcs($account, 'RevokeSecurityGroup', $query, 10.0);
+            return true;
+        }, 'deleteSecurityGroupRule');
     }
 
     // ==================== BSS 费用中心 API ====================
@@ -253,24 +463,21 @@ class AliyunService
 
     /**
      * 查询账户可用余额
-     * @param string $key AccessKey
-     * @param string $secret Secret
+     * @param array $account 账户配置
      * @return array ['AvailableAmount' => '...', 'Currency' => 'CNY']
      * @throws \Exception
      */
-    public function getAccountBalance($key, $secret, $siteType = 'china')
+    public function getAccountBalance($account)
     {
-        $cacheKey = md5($key);
+        $cacheKey = md5($this->getAccountProxyCacheKey($account) . '|balance');
         if (isset($this->balanceCache[$cacheKey])) {
             return $this->balanceCache[$cacheKey];
         }
 
-        $bss = $this->getBssEndpoint($siteType);
+        $bss = $this->getBssEndpoint($account['site_type'] ?? 'china');
 
-        $result = $this->executeWithRetry(function () use ($key, $secret, $bss) {
-            AlibabaCloud::accessKeyClient($key, $secret)
-                ->regionId($bss['regionId'])
-                ->asDefaultClient();
+        $result = $this->executeWithRetry(function () use ($account, $bss) {
+            $this->initAccessKeyClient($account['access_key_id'], $account['access_key_secret'], $bss['regionId']);
 
             return AlibabaCloud::rpc()
                 ->product('BssOpenApi')
@@ -279,10 +486,7 @@ class AliyunService
                 ->action('QueryAccountBalance')
                 ->method('POST')
                 ->host($bss['host'])
-                ->options([
-                    'connect_timeout' => 5.0,
-                    'timeout' => 10.0
-                ])
+                ->options($this->buildRequestOptions($account, [], 10.0))
                 ->request();
         }, 'getAccountBalance');
 
@@ -297,21 +501,17 @@ class AliyunService
 
     /**
      * 查询指定实例的当月账单明细
-     * @param string $key AccessKey
-     * @param string $secret Secret
-     * @param string $instanceId 实例ID
+     * @param array $account 账户配置
      * @param string $billingCycle 账期 (格式: 2026-03)
      * @return array ['TotalCost' => float, 'Items' => [...]]
      * @throws \Exception
      */
-    public function getInstanceBill($key, $secret, $instanceId, $billingCycle, $siteType = 'china')
+    public function getInstanceBill($account, $billingCycle)
     {
-        $bss = $this->getBssEndpoint($siteType);
+        $bss = $this->getBssEndpoint($account['site_type'] ?? 'china');
 
-        $result = $this->executeWithRetry(function () use ($key, $secret, $instanceId, $billingCycle, $bss) {
-            AlibabaCloud::accessKeyClient($key, $secret)
-                ->regionId($bss['regionId'])
-                ->asDefaultClient();
+        $result = $this->executeWithRetry(function () use ($account, $billingCycle, $bss) {
+            $this->initAccessKeyClient($account['access_key_id'], $account['access_key_secret'], $bss['regionId']);
 
             return AlibabaCloud::rpc()
                 ->product('BssOpenApi')
@@ -320,15 +520,11 @@ class AliyunService
                 ->action('DescribeInstanceBill')
                 ->method('POST')
                 ->host($bss['host'])
-                ->options([
-                    'query' => [
-                        'BillingCycle' => $billingCycle,
-                        'InstanceID' => $instanceId,
-                        'Granularity' => 'MONTHLY'
-                    ],
-                    'connect_timeout' => 5.0,
-                    'timeout' => 15.0
-                ])
+                ->options($this->buildRequestOptions($account, [
+                    'BillingCycle' => $billingCycle,
+                    'InstanceID' => $account['instance_id'],
+                    'Granularity' => 'MONTHLY'
+                ], 15.0))
                 ->request();
         }, 'getInstanceBill');
 
@@ -358,20 +554,17 @@ class AliyunService
 
     /**
      * 查询账单总览 (按产品分类的月度费用)
-     * @param string $key AccessKey
-     * @param string $secret Secret
+     * @param array $account 账户配置
      * @param string $billingCycle 账期 (格式: 2026-03)
      * @return array ['TotalCost' => float, 'Products' => [...]]
      * @throws \Exception
      */
-    public function getBillOverview($key, $secret, $billingCycle, $siteType = 'china')
+    public function getBillOverview($account, $billingCycle)
     {
-        $bss = $this->getBssEndpoint($siteType);
+        $bss = $this->getBssEndpoint($account['site_type'] ?? 'china');
 
-        $result = $this->executeWithRetry(function () use ($key, $secret, $billingCycle, $bss) {
-            AlibabaCloud::accessKeyClient($key, $secret)
-                ->regionId($bss['regionId'])
-                ->asDefaultClient();
+        $result = $this->executeWithRetry(function () use ($account, $billingCycle, $bss) {
+            $this->initAccessKeyClient($account['access_key_id'], $account['access_key_secret'], $bss['regionId']);
 
             return AlibabaCloud::rpc()
                 ->product('BssOpenApi')
@@ -380,13 +573,9 @@ class AliyunService
                 ->action('QueryBillOverview')
                 ->method('POST')
                 ->host($bss['host'])
-                ->options([
-                    'query' => [
-                        'BillingCycle' => $billingCycle
-                    ],
-                    'connect_timeout' => 5.0,
-                    'timeout' => 15.0
-                ])
+                ->options($this->buildRequestOptions($account, [
+                    'BillingCycle' => $billingCycle
+                ], 15.0))
                 ->request();
         }, 'getBillOverview');
 

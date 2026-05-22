@@ -81,14 +81,22 @@ class Database
 
         $this->pdo->exec("CREATE TABLE IF NOT EXISTS accounts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cloud_provider TEXT DEFAULT 'aliyun',
             access_key_id TEXT,
             access_key_secret TEXT,
             region_id TEXT,
             instance_id TEXT,
+            project_id TEXT DEFAULT '',
+            security_group_id TEXT DEFAULT '',
             max_traffic REAL,
             schedule_enabled INTEGER DEFAULT 0,
             start_time TEXT,
             stop_time TEXT,
+            api_proxy_enabled INTEGER DEFAULT 0,
+            api_proxy_host TEXT DEFAULT '',
+            api_proxy_port TEXT DEFAULT '',
+            api_proxy_user TEXT DEFAULT '',
+            api_proxy_pass TEXT DEFAULT '',
             traffic_used REAL DEFAULT 0,
             instance_status TEXT DEFAULT 'Unknown',
             updated_at INTEGER DEFAULT 0,
@@ -138,6 +146,14 @@ class Database
         $this->ensureColumn('accounts', 'last_keep_alive_at', 'INTEGER DEFAULT 0');
         $this->ensureColumn('accounts', 'remark', "TEXT DEFAULT ''");
         $this->ensureColumn('accounts', 'site_type', "TEXT DEFAULT 'china'");
+        $this->ensureColumn('accounts', 'cloud_provider', "TEXT DEFAULT 'aliyun'");
+        $this->ensureColumn('accounts', 'project_id', "TEXT DEFAULT ''");
+        $this->ensureColumn('accounts', 'security_group_id', "TEXT DEFAULT ''");
+        $this->ensureColumn('accounts', 'api_proxy_enabled', 'INTEGER DEFAULT 0');
+        $this->ensureColumn('accounts', 'api_proxy_host', "TEXT DEFAULT ''");
+        $this->ensureColumn('accounts', 'api_proxy_port', "TEXT DEFAULT ''");
+        $this->ensureColumn('accounts', 'api_proxy_user', "TEXT DEFAULT ''");
+        $this->ensureColumn('accounts', 'api_proxy_pass', "TEXT DEFAULT ''");
 
         $this->migrateStatsToAccountId();
     }
