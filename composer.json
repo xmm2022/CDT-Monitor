@@ -2,7 +2,10 @@
     "require": {
         "alibabacloud/client": "^1.5",
         "phpmailer/phpmailer": "^6.9",
-        "huaweicloud/huaweicloud-sdk-php": "^3.1"
+        "huaweicloud/huaweicloud-sdk-php": "^3.1",
+        "tencentcloud/cvm": "^3.0",
+        "aws/aws-sdk-php": "^3.337",
+        "google/cloud-compute": "^1.18"
     },
     "repositories": {
         "packagist": {
