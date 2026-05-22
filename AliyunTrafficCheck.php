@@ -539,7 +539,7 @@ class AliyunTrafficCheck
                     'remark' => $account['remark'] ?? ''
                 ];
 
-                $data[] = array_merge($item, $this->buildHuaweiFrontendItem($account, $context));
+                $data[] = array_merge($item, $this->buildInstanceContextFrontendItem($account, $context));
                 continue;
             }
 
@@ -947,8 +947,7 @@ class AliyunTrafficCheck
 
     private function providerSupportsInstanceContext($provider, $account)
     {
-        return ($account['cloud_provider'] ?? 'aliyun') === 'huaweicloud'
-            && is_object($provider)
+        return is_object($provider)
             && method_exists($provider, 'describeAccountContext');
     }
 
@@ -967,14 +966,22 @@ class AliyunTrafficCheck
                 'securityGroupNames' => [],
                 'discoveryStatus' => 'error',
                 'discoveryMode' => 'security_group_fallback',
-                'discoveryMessage' => trim((string) $e->getMessage()) ?: '华为云实例发现失败',
+                'discoveryMessage' => trim((string) $e->getMessage()) ?: '实例发现失败',
                 'usingFallbackSecurityGroup' => false,
                 'fallbackSecurityGroupId' => trim((string) ($account['security_group_id'] ?? '')),
+                'trafficDataAvailable' => false,
+                'trafficUsedGb' => null,
+                'trafficError' => '',
             ];
         }
     }
 
     private function buildHuaweiFrontendItem(array $account, array $context): array
+    {
+        return $this->buildInstanceContextFrontendItem($account, $context);
+    }
+
+    private function buildInstanceContextFrontendItem(array $account, array $context): array
     {
         $primaryGroup = $context['securityGroups'][0] ?? [];
         $trafficDataAvailable = !empty($context['trafficDataAvailable']);

@@ -1,6 +1,8 @@
 <?php
 
 require_once __DIR__ . '/CloudProviderInterface.php';
+require_once __DIR__ . '/CloudInstanceContextInterface.php';
+require_once __DIR__ . '/InstanceContextHelpers.php';
 
 use HuaweiCloud\SDK\Core\Auth\BasicCredentials;
 use HuaweiCloud\SDK\Core\Http\HttpConfig;
@@ -25,8 +27,10 @@ use HuaweiCloud\SDK\Vpc\V3\Model\DeleteSecurityGroupRuleRequest;
 use HuaweiCloud\SDK\Vpc\V3\Model\ShowSecurityGroupRequest;
 use HuaweiCloud\SDK\Vpc\V3\VpcClient;
 
-class HuaweiCloudProvider implements CloudProviderInterface
+class HuaweiCloudProvider implements CloudProviderInterface, CloudInstanceContextInterface
 {
+    use InstanceContextHelpers;
+
     public function getProviderKey(): string
     {
         return 'huaweicloud';
