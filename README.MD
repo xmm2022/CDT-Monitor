@@ -11,7 +11,7 @@
 核心场景：
 
 * **流量熔断**：阿里云 CDT 免费额度超支前自动停机，防止意外扣费
-* **多账号统一管理**：阿里云、华为云账号在同一面板查看流量、状态、计费
+* **多账号统一管理**：阿里云、华为云、腾讯云、AWS、GCP 账号在同一面板查看实例状态与可用能力
 * **保活策略**：抢占式实例被云平台异常释放时自动拉起
 * **可视化**：近 24 小时与近 30 天流量曲线、阈值预警
 
@@ -23,9 +23,9 @@
 |---|---|---|---|---|---|
 | **阿里云 (Aliyun)** | ✅ | ✅ | ✅ | ✅ | 通过 CDT 流量包 API |
 | **华为云 (HuaweiCloud)** | ✅ | ✅ | ✅ | ⚠️ 部分 | 实例优先 + 安全组自动发现 |
-| 腾讯云 (Tencent) | 🛠️ 规划中 | | | | |
-| AWS | 🛠️ 规划中 | | | | |
-| GCP | 🛠️ 规划中 | | | | |
+| 腾讯云 (Tencent Cloud) | | ✅ | ✅ | | 第一阶段支持实例运维，不含流量/账单 |
+| AWS | | ✅ | ✅ | | 第一阶段支持 EC2 运维，不含流量/账单 |
+| GCP | | ✅ | ✅ 防火墙规则 | | 第一阶段支持 Compute Engine 运维，不含流量/账单 |
 
 底层使用 `providers/CloudProviderInterface.php` 抽象，新增厂商参考 `AliyunProvider.php`。
 
@@ -203,6 +203,14 @@ https://您的域名/monitor.php?key=您的管理员密码
 - Project ID（IAM 项目 ID）
 - Instance ID
 - （可选）Security Group ID — 作为兜底
+
+### 腾讯云 / AWS / GCP 账号配置说明
+
+新增云厂商第一阶段聚焦实例运维能力：实例状态、手动开关机、安全组或防火墙规则管理。流量监控、账单摘要、阈值熔断和定时自动开关机不在第一阶段范围内。
+
+- 腾讯云：填写 SecretId、SecretKey、Region、CVM Instance ID。
+- AWS：填写 Access Key ID、Secret Access Key、Region、EC2 Instance ID。
+- GCP：填写 Project ID、Zone、Instance Name、Service Account JSON。GCP 使用防火墙规则模型，新增规则会使用 `cdt-monitor-` 前缀，删除时只允许删除此前缀下的规则。
 
 ## 🤝 参与贡献 (Contributing)
 
