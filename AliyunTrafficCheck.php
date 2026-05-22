@@ -155,6 +155,10 @@ class AliyunTrafficCheck
 
         foreach ($accounts as $row) {
             $provider = $this->getProviderForAccount($row);
+            $extraConfig = json_decode($row['extra_config'] ?? '{}', true);
+            if (!is_array($extraConfig)) {
+                $extraConfig = [];
+            }
             $accountConfig = [
                 'cloudProvider' => $row['cloud_provider'] ?? 'aliyun',
                 'capabilities' => $provider->getCapabilities($row),
@@ -178,7 +182,8 @@ class AliyunTrafficCheck
                     'port' => $row['api_proxy_port'] ?? '',
                     'username' => $row['api_proxy_user'] ?? '',
                     'password' => $row['api_proxy_pass'] ?? ''
-                ]
+                ],
+                'extraConfig' => $extraConfig
             ];
 
             if ($this->providerSupportsInstanceContext($provider, $row) && empty($row['instance_id'])) {

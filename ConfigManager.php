@@ -143,8 +143,8 @@ class ConfigManager
             }
 
             $keptIds = [];
-            $insertStmt = $this->db->prepare("INSERT INTO accounts (cloud_provider, access_key_id, access_key_secret, region_id, instance_id, project_id, security_group_id, max_traffic, schedule_enabled, start_time, stop_time, remark, site_type, api_proxy_enabled, api_proxy_host, api_proxy_port, api_proxy_user, api_proxy_pass, traffic_used, instance_status, updated_at, last_keep_alive_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'Unknown', 0, 0)");
-            $updateStmt = $this->db->prepare("UPDATE accounts SET cloud_provider = ?, access_key_secret = ?, region_id = ?, instance_id = ?, project_id = ?, security_group_id = ?, max_traffic = ?, schedule_enabled = ?, start_time = ?, stop_time = ?, remark = ?, site_type = ?, api_proxy_enabled = ?, api_proxy_host = ?, api_proxy_port = ?, api_proxy_user = ?, api_proxy_pass = ? WHERE id = ?");
+            $insertStmt = $this->db->prepare("INSERT INTO accounts (cloud_provider, access_key_id, access_key_secret, region_id, instance_id, project_id, security_group_id, max_traffic, schedule_enabled, start_time, stop_time, remark, site_type, api_proxy_enabled, api_proxy_host, api_proxy_port, api_proxy_user, api_proxy_pass, extra_config, traffic_used, instance_status, updated_at, last_keep_alive_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'Unknown', 0, 0)");
+            $updateStmt = $this->db->prepare("UPDATE accounts SET cloud_provider = ?, access_key_secret = ?, region_id = ?, instance_id = ?, project_id = ?, security_group_id = ?, max_traffic = ?, schedule_enabled = ?, start_time = ?, stop_time = ?, remark = ?, site_type = ?, api_proxy_enabled = ?, api_proxy_host = ?, api_proxy_port = ?, api_proxy_user = ?, api_proxy_pass = ?, extra_config = ? WHERE id = ?");
 
             foreach ($newAccounts as $acc) {
                 $provider = $acc['cloudProvider'] ?? 'aliyun';
@@ -154,8 +154,10 @@ class ConfigManager
                 $instance = trim((string) ($acc['instanceId'] ?? ''));
                 $projectId = trim((string) ($acc['projectId'] ?? ''));
                 $securityGroupId = trim((string) ($acc['securityGroupId'] ?? ''));
+                $extraConfig = $this->normalizeExtraConfig($acc['extraConfig'] ?? []);
+                $decodedExtraConfig = json_decode($extraConfig, true) ?: [];
 
-                $this->validateAccountPayload($provider, $key, $secret, $region, $projectId, $instance);
+                $this->validateAccountPayload($provider, $key, $secret, $region, $projectId, $instance, $decodedExtraConfig);
 
                 $compositeKey = $provider . '|' . $key . '|' . $region . '|' . $instance . '|' . $securityGroupId;
 
@@ -175,7 +177,8 @@ class ConfigManager
                     trim((string) ($acc['apiProxy']['host'] ?? '')),
                     trim((string) ($acc['apiProxy']['port'] ?? '')),
                     trim((string) ($acc['apiProxy']['username'] ?? '')),
-                    (string) ($acc['apiProxy']['password'] ?? '')
+                    (string) ($acc['apiProxy']['password'] ?? ''),
+                    $extraConfig
                 ];
 
                 if (isset($existingMap[$compositeKey])) {
@@ -221,19 +224,59 @@ class ConfigManager
         }
     }
 
-    private function validateAccountPayload($provider, $key, $secret, $region, $projectId, $instance)
+    private function normalizeExtraConfig($extraConfig): string
     {
-        if (trim((string) $key) === '' || trim((string) $secret) === '' || trim((string) $region) === '') {
-            throw new Exception('账号缺少 AccessKey 或 Region ID');
+        if (is_string($extraConfig)) {
+            $decoded = json_decode($extraConfig, true);
+            if (!is_array($decoded)) {
+                throw new Exception('extraConfig 必须是有效 JSON');
+            }
+            $extraConfig = $decoded;
         }
 
-        if ($provider !== 'huaweicloud') {
+        if (!is_array($extraConfig)) {
+            throw new Exception('extraConfig 必须是对象');
+        }
+
+        return json_encode($extraConfig, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    private function validateAccountPayload($provider, $key, $secret, $region, $projectId, $instance, array $extraConfig = [])
+    {
+        $key = trim((string) $key);
+        $secret = trim((string) $secret);
+        $region = trim((string) $region);
+        $projectId = trim((string) $projectId);
+        $instance = trim((string) $instance);
+
+        if ($provider === 'gcp') {
+            $zone = trim((string) ($extraConfig['zone'] ?? $region));
+            $serviceAccountJson = trim((string) ($extraConfig['service_account_json'] ?? ''));
+            if ($projectId === '' || $zone === '' || $instance === '' || $serviceAccountJson === '') {
+                throw new Exception('GCP 账号必须填写 Project ID、Zone、Instance Name 和 Service Account JSON');
+            }
+            $decoded = json_decode($serviceAccountJson, true);
+            if (!is_array($decoded)) {
+                throw new Exception('GCP Service Account JSON 格式无效');
+            }
             return;
         }
 
-        if ($projectId === '' || $instance === '') {
-            throw new Exception('华为云账号必须填写 Project ID 和 Instance ID');
+        if ($provider === 'huaweicloud') {
+            if ($key === '' || $secret === '' || $region === '' || $projectId === '' || $instance === '') {
+                throw new Exception('华为云账号必须填写 AccessKey、Region ID、Project ID 和 Instance ID');
+            }
+            return;
         }
+
+        if (in_array($provider, ['aliyun', 'tencentcloud', 'aws'], true)) {
+            if ($key === '' || $secret === '' || $region === '' || $instance === '') {
+                throw new Exception('账号缺少 AccessKey、Region ID 或 Instance ID');
+            }
+            return;
+        }
+
+        throw new Exception("暂不支持的云厂商: {$provider}");
     }
 
     private function reorderIds()
@@ -247,7 +290,7 @@ class ConfigManager
                 $this->db->exec("DELETE FROM accounts");
                 $this->db->exec("DELETE FROM sqlite_sequence WHERE name='accounts'");
 
-                $insertStmt = $this->db->prepare("INSERT INTO accounts (id, cloud_provider, access_key_id, access_key_secret, region_id, instance_id, project_id, security_group_id, max_traffic, schedule_enabled, start_time, stop_time, remark, site_type, api_proxy_enabled, api_proxy_host, api_proxy_port, api_proxy_user, api_proxy_pass, traffic_used, instance_status, updated_at, last_keep_alive_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                $insertStmt = $this->db->prepare("INSERT INTO accounts (id, cloud_provider, access_key_id, access_key_secret, region_id, instance_id, project_id, security_group_id, max_traffic, schedule_enabled, start_time, stop_time, remark, site_type, api_proxy_enabled, api_proxy_host, api_proxy_port, api_proxy_user, api_proxy_pass, extra_config, traffic_used, instance_status, updated_at, last_keep_alive_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
 
                 $newId = 1;
                 foreach ($rows as $row) {
@@ -271,6 +314,7 @@ class ConfigManager
                         $row['api_proxy_port'] ?? '',
                         $row['api_proxy_user'] ?? '',
                         $row['api_proxy_pass'] ?? '',
+                        $row['extra_config'] ?? '{}',
                         $row['traffic_used'],
                         $row['instance_status'],
                         $row['updated_at'],

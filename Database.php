@@ -97,6 +97,7 @@ class Database
             api_proxy_port TEXT DEFAULT '',
             api_proxy_user TEXT DEFAULT '',
             api_proxy_pass TEXT DEFAULT '',
+            extra_config TEXT DEFAULT '{}',
             traffic_used REAL DEFAULT 0,
             instance_status TEXT DEFAULT 'Unknown',
             updated_at INTEGER DEFAULT 0,
@@ -154,6 +155,7 @@ class Database
         $this->ensureColumn('accounts', 'api_proxy_port', "TEXT DEFAULT ''");
         $this->ensureColumn('accounts', 'api_proxy_user', "TEXT DEFAULT ''");
         $this->ensureColumn('accounts', 'api_proxy_pass', "TEXT DEFAULT ''");
+        $this->ensureColumn('accounts', 'extra_config', "TEXT DEFAULT '{}'");
 
         $this->migrateStatsToAccountId();
     }
