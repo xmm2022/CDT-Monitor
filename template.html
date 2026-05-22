@@ -394,7 +394,7 @@
                 class="glass-panel relative z-10 my-4 md:my-8 w-full max-w-5xl max-h-[calc(100vh-2rem)] md:max-h-[85vh] flex flex-col rounded-[32px] shadow-2xl bg-white/90 overflow-hidden mx-auto">
                 <div class="flex justify-between items-start gap-4 p-6 border-b border-gray-100">
                     <div>
-                        <h3 class="text-xl font-bold text-[#1C1C1E]">端口管理</h3>
+                        <h3 class="text-xl font-bold text-[#1C1C1E]">端口管理 · {{ getSecurityRuleLabel(currentSecurityGroupProvider) }}</h3>
                         <p class="text-xs text-gray-400 font-mono mt-1">账号: {{ currentSecurityGroupAccount }}</p>
                         <p class="text-xs text-gray-400 font-mono mt-1">实例: {{ currentSecurityGroupInstanceName || currentSecurityGroupInstanceId || '未绑定实例' }} | 区域: {{ currentSecurityGroupRegion }}</p>
                         <p v-if="currentSecurityGroupPublicIp" class="text-xs text-gray-400 font-mono mt-1">公网 IP: {{ currentSecurityGroupPublicIp }}</p>
@@ -426,10 +426,10 @@
 
                     <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
                         <div class="space-y-1">
-                            <label class="text-xs font-medium text-gray-500 ml-1">安全组</label>
+                            <label class="text-xs font-medium text-gray-500 ml-1">{{ getSecurityRuleLabel(currentSecurityGroupProvider) }}</label>
                             <select v-model="securityGroupForm.security_group_id"
                                 class="w-full glass-input rounded-xl px-4 py-2 text-sm appearance-none">
-                                <option value="" disabled>请选择安全组</option>
+                                <option value="" disabled>请选择{{ getSecurityRuleLabel(currentSecurityGroupProvider) }}</option>
                                 <option v-for="group in securityGroups" :key="group.security_group_id"
                                     :value="group.security_group_id">
                                     {{ group.security_group_name }} ({{ group.security_group_id }})
@@ -468,7 +468,7 @@
                         <button @click="submitSecurityGroupRule"
                             :disabled="securityGroupSubmitting || securityGroups.length === 0"
                             class="bg-[#1C1C1E] text-white px-5 py-2.5 rounded-xl text-sm font-bold tap-effect disabled:opacity-50 disabled:cursor-not-allowed">
-                            {{ securityGroupSubmitting ? '提交中...' : '新增入站规则' }}
+                            {{ securityGroupSubmitting ? '提交中...' : '新增' + getSecurityRuleLabel(currentSecurityGroupProvider) }}
                         </button>
                     </div>
                 </div>
@@ -491,7 +491,7 @@
 
                     <div v-if="!securityGroupLoading && securityGroups.length === 0"
                         class="text-sm text-gray-400 text-center py-16">
-                        当前实例未查询到安全组或暂无可展示的入站规则。
+                        当前实例未查询到{{ getSecurityRuleLabel(currentSecurityGroupProvider) }}或暂无可展示的入站规则。
                     </div>
 
                     <div v-for="group in securityGroups" :key="group.security_group_id"
@@ -509,7 +509,7 @@
 
                         <div v-if="group.rules.length === 0"
                             class="text-sm text-gray-400 py-6 text-center border border-dashed border-gray-200 rounded-2xl">
-                            该安全组暂无入站规则
+                            该{{ getSecurityRuleLabel(currentSecurityGroupProvider) }}暂无入站规则
                         </div>
 
                         <div v-for="rule in group.rules"
@@ -1032,6 +1032,9 @@
                                             class="w-full glass-input rounded-xl px-4 py-2 text-sm appearance-none cursor-pointer">
                                             <option value="aliyun">阿里云</option>
                                             <option value="huaweicloud">华为云</option>
+                                            <option value="tencentcloud">腾讯云</option>
+                                            <option value="aws">AWS</option>
+                                            <option value="gcp">GCP</option>
                                         </select>
                                     </div>
                                     <div class="space-y-1">
@@ -1044,10 +1047,10 @@
                                         <input v-model="acc.AccessKeySecret" type="password"
                                             class="w-full glass-input rounded-xl px-4 py-2 text-sm">
                                     </div>
-                                    <div v-if="acc.cloudProvider === 'aliyun' || acc.cloudProvider === 'huaweicloud'" class="space-y-1">
+                                    <div v-if="isInstanceOpsProvider(acc.cloudProvider) || acc.cloudProvider === 'aliyun'" class="space-y-1">
                                         <label class="text-xs font-medium text-gray-500 ml-2">Instance ID</label>
                                         <input v-model.trim="acc.instanceId"
-                                            :placeholder="acc.cloudProvider === 'huaweicloud' ? '华为云 ECS Instance ID (必填)' : '实例 ID (必填)'"
+                                            :placeholder="getInstancePlaceholder(acc)"
                                             class="w-full glass-input rounded-xl px-4 py-2 text-sm">
                                         <p v-if="acc.cloudProvider === 'huaweicloud'" class="text-[10px] text-gray-400 mt-1 px-1 leading-tight">
                                             默认按实例自动发现该 ECS 绑定的全部安全组。
@@ -1104,9 +1107,35 @@
                                 </div>
 
                                 <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div v-if="acc.cloudProvider === 'huaweicloud'" class="space-y-1">
+                                    <div v-if="acc.cloudProvider === 'huaweicloud' || acc.cloudProvider === 'gcp'" class="space-y-1">
                                         <label class="text-xs font-medium text-gray-500 ml-2">Project ID</label>
-                                        <input v-model.trim="acc.projectId" placeholder="32位项目 ID"
+                                        <input v-model.trim="acc.projectId" :placeholder="acc.cloudProvider === 'gcp' ? 'GCP Project ID' : '32位项目 ID'"
+                                            class="w-full glass-input rounded-xl px-4 py-2 text-sm font-mono">
+                                    </div>
+                                    <div v-if="acc.cloudProvider === 'gcp'" class="space-y-1">
+                                        <label class="text-xs font-medium text-gray-500 ml-2">GCP Zone</label>
+                                        <input v-model.trim="acc.extraConfig.zone" placeholder="asia-east1-a"
+                                            class="w-full glass-input rounded-xl px-4 py-2 text-sm font-mono">
+                                    </div>
+                                    <div v-if="acc.cloudProvider === 'gcp'" class="space-y-1 md:col-span-2">
+                                        <label class="text-xs font-medium text-gray-500 ml-2">Service Account JSON</label>
+                                        <textarea v-model.trim="acc.extraConfig.service_account_json" rows="4"
+                                            class="w-full glass-input rounded-xl px-4 py-2 text-xs font-mono"
+                                            placeholder='{"type":"service_account","project_id":"..."}'></textarea>
+                                    </div>
+                                    <div v-if="acc.cloudProvider === 'gcp'" class="space-y-1">
+                                        <label class="text-xs font-medium text-gray-500 ml-2">Network</label>
+                                        <input v-model.trim="acc.extraConfig.network" placeholder="default"
+                                            class="w-full glass-input rounded-xl px-4 py-2 text-sm font-mono">
+                                    </div>
+                                    <div v-if="acc.cloudProvider === 'gcp'" class="space-y-1">
+                                        <label class="text-xs font-medium text-gray-500 ml-2">Target Tags</label>
+                                        <input v-model.trim="acc.extraConfig.target_tags" placeholder="web,ssh"
+                                            class="w-full glass-input rounded-xl px-4 py-2 text-sm font-mono">
+                                    </div>
+                                    <div v-if="acc.cloudProvider === 'gcp'" class="space-y-1">
+                                        <label class="text-xs font-medium text-gray-500 ml-2">Firewall Prefix</label>
+                                        <input v-model.trim="acc.extraConfig.firewall_rule_prefix" placeholder="cdt-monitor-"
                                             class="w-full glass-input rounded-xl px-4 py-2 text-sm font-mono">
                                     </div>
                                     <div v-if="acc.cloudProvider === 'huaweicloud'" class="space-y-1">
@@ -1386,6 +1415,7 @@
                 const currentSecurityGroupInstanceName = ref('');
                 const currentSecurityGroupRegion = ref('');
                 const currentSecurityGroupPublicIp = ref('');
+                const currentSecurityGroupProvider = ref('');
                 const currentSecurityGroupDiscoveryStatus = ref('');
                 const currentSecurityGroupDiscoveryMode = ref('');
                 const currentSecurityGroupDiscoveryMessage = ref('');
@@ -1450,6 +1480,21 @@
                         label: '华为云',
                         trafficLabel: '公网流量',
                         badgeClass: 'bg-slate-100 text-slate-600 border-slate-200'
+                    },
+                    tencentcloud: {
+                        label: '腾讯云',
+                        trafficLabel: '实例运维',
+                        badgeClass: 'bg-blue-50 text-blue-600 border-blue-200'
+                    },
+                    aws: {
+                        label: 'AWS',
+                        trafficLabel: '实例运维',
+                        badgeClass: 'bg-yellow-50 text-yellow-700 border-yellow-200'
+                    },
+                    gcp: {
+                        label: 'GCP',
+                        trafficLabel: '实例运维',
+                        badgeClass: 'bg-emerald-50 text-emerald-600 border-emerald-200'
                     }
                 };
 
@@ -1475,6 +1520,40 @@
                         per_account_proxy: true,
                         site_type_select: false,
                         region_picker: true
+                    },
+                    tencentcloud: {
+                        traffic_monitor: false,
+                        security_group_manage: true,
+                        instance_start_stop: true,
+                        stop_charging: false,
+                        billing_summary: false,
+                        schedule_manage: false,
+                        per_account_proxy: true,
+                        site_type_select: false,
+                        region_picker: true
+                    },
+                    aws: {
+                        traffic_monitor: false,
+                        security_group_manage: true,
+                        instance_start_stop: true,
+                        stop_charging: false,
+                        billing_summary: false,
+                        schedule_manage: false,
+                        per_account_proxy: true,
+                        site_type_select: false,
+                        region_picker: true
+                    },
+                    gcp: {
+                        traffic_monitor: false,
+                        security_group_manage: true,
+                        instance_start_stop: true,
+                        stop_charging: false,
+                        billing_summary: false,
+                        schedule_manage: false,
+                        per_account_proxy: false,
+                        site_type_select: false,
+                        region_picker: true,
+                        firewall_rule_model: true
                     }
                 };
 
@@ -1488,9 +1567,26 @@
                     ...(providerCapabilityMap[providerKey] || {})
                 });
 
+                const defaultExtraConfig = (extraConfig = {}) => ({
+                    zone: extraConfig.zone || '',
+                    network: extraConfig.network || 'default',
+                    target_tags: extraConfig.target_tags || '',
+                    firewall_rule_prefix: extraConfig.firewall_rule_prefix || 'cdt-monitor-',
+                    service_account_json: extraConfig.service_account_json || ''
+                });
+
+                const ensureAccountExtraConfig = (account) => {
+                    if (!account) return;
+                    if (typeof account.extraConfig === 'undefined' || account.extraConfig === null || typeof account.extraConfig !== 'object') {
+                        account.extraConfig = {};
+                    }
+                    account.extraConfig = defaultExtraConfig(account.extraConfig);
+                };
+
                 const syncAccountCapabilities = (account) => {
                     if (!account) return;
                     account.capabilities = getCapabilitiesForProvider(account.cloudProvider);
+                    ensureAccountExtraConfig(account);
                 };
 
                 const applySuggestedInstanceId = (account) => {
@@ -1555,16 +1651,25 @@
                 const getTrafficLabel = (item) => getProviderMeta(item?.cloudProvider).trafficLabel;
                 const getProviderBadgeClass = (providerKey) => getProviderMeta(providerKey).badgeClass;
                 const canShowChart = (item) => itemSupports(item, 'traffic_monitor') && (item?.cloudProvider !== 'huaweicloud' || !!item?.trafficDataAvailable);
-                const shouldUsePrimaryMetricCard = (item) => itemSupports(item, 'traffic_monitor') || item?.cloudProvider === 'huaweicloud';
-                const getPrimaryMetricValue = (item) => item?.primaryMetricValueText ?? (item?.cloudProvider === 'huaweicloud' ? (item?.securityGroupCount ?? 0) : item?.flow_used);
-                const getPrimaryMetricUnit = (item) => item?.primaryMetricUnit ?? (item?.cloudProvider === 'huaweicloud' ? '组' : 'GB');
+                const isInstanceOpsProvider = (providerKey) => ['huaweicloud', 'tencentcloud', 'aws', 'gcp'].includes(providerKey);
+                const getSecurityRuleLabel = (providerKey) => providerKey === 'gcp' ? '防火墙规则' : '安全组';
+                const getInstancePlaceholder = (account) => {
+                    if (account?.cloudProvider === 'huaweicloud') return '华为云 ECS Instance ID (必填)';
+                    if (account?.cloudProvider === 'gcp') return 'GCP Instance Name (必填)';
+                    if (account?.cloudProvider === 'aws') return 'EC2 Instance ID (必填)';
+                    if (account?.cloudProvider === 'tencentcloud') return '腾讯云 CVM Instance ID (必填)';
+                    return '实例 ID (必填)';
+                };
+                const shouldUsePrimaryMetricCard = (item) => itemSupports(item, 'traffic_monitor') || isInstanceOpsProvider(item?.cloudProvider);
+                const getPrimaryMetricValue = (item) => item?.primaryMetricValueText ?? (isInstanceOpsProvider(item?.cloudProvider) ? (item?.securityGroupCount ?? 0) : item?.flow_used);
+                const getPrimaryMetricUnit = (item) => item?.primaryMetricUnit ?? (isInstanceOpsProvider(item?.cloudProvider) ? '组' : 'GB');
                 const getPrimaryMetricLabel = (item) => item?.primaryMetricLabel || getTrafficLabel(item);
                 const getPrimaryMetricSummary = (item) => {
-                    if (item?.cloudProvider === 'huaweicloud') {
+                    if (isInstanceOpsProvider(item?.cloudProvider)) {
                         if (item?.trafficDataAvailable) {
                             return `${item?.percentageOfUse ?? 0}% / ${item?.flow_total ?? 0}G`;
                         }
-                        return `Max ${item?.flow_total ?? 0}G`;
+                        return `${getSecurityRuleLabel(item?.cloudProvider)} ${item?.securityGroupCount ?? 0}`;
                     }
                     return `${item?.percentageOfUse ?? 0}% / ${item?.flow_total ?? 0}G`;
                 };
@@ -1770,12 +1875,12 @@
                             ensureSecurityGroupSelection();
                         } else {
                             securityGroups.value = [];
-                            securityGroupError.value = data.message || '安全组加载失败';
+                            securityGroupError.value = data.message || `${getSecurityRuleLabel(currentSecurityGroupProvider.value)}加载失败`;
                         }
                     } catch (e) {
                         console.error(e);
                         securityGroups.value = [];
-                        securityGroupError.value = '安全组加载失败，请检查网络连接';
+                        securityGroupError.value = `${getSecurityRuleLabel(currentSecurityGroupProvider.value)}加载失败，请检查网络连接`;
                     } finally {
                         securityGroupLoading.value = false;
                     }
@@ -1788,6 +1893,7 @@
                     currentSecurityGroupInstanceName.value = item.instanceName || '';
                     currentSecurityGroupRegion.value = item.region || '';
                     currentSecurityGroupPublicIp.value = item.publicIp || '';
+                    currentSecurityGroupProvider.value = item.cloudProvider || '';
                     currentSecurityGroupDiscoveryStatus.value = item.discoveryStatus || '';
                     currentSecurityGroupDiscoveryMode.value = item.discoveryMode || '';
                     currentSecurityGroupDiscoveryMessage.value = item.discoveryMessage || '';
@@ -1817,6 +1923,7 @@
                     currentSecurityGroupInstanceName.value = '';
                     currentSecurityGroupRegion.value = '';
                     currentSecurityGroupPublicIp.value = '';
+                    currentSecurityGroupProvider.value = '';
                     currentSecurityGroupDiscoveryStatus.value = '';
                     currentSecurityGroupDiscoveryMode.value = '';
                     currentSecurityGroupDiscoveryMessage.value = '';
@@ -1852,11 +1959,11 @@
                             await loadSecurityGroups();
                             alert(data.message || '规则已添加');
                         } else {
-                            securityGroupError.value = data.message || '新增规则失败';
+                            securityGroupError.value = data.message || `新增${getSecurityRuleLabel(currentSecurityGroupProvider.value)}失败`;
                         }
                     } catch (e) {
                         console.error(e);
-                        securityGroupError.value = '新增规则失败，请检查网络连接';
+                        securityGroupError.value = `新增${getSecurityRuleLabel(currentSecurityGroupProvider.value)}失败，请检查网络连接`;
                     } finally {
                         securityGroupSubmitting.value = false;
                     }
@@ -1895,11 +2002,11 @@
                         if (data.success) {
                             await loadSecurityGroups();
                         } else {
-                            securityGroupError.value = data.message || '删除规则失败';
+                            securityGroupError.value = data.message || `删除${getSecurityRuleLabel(currentSecurityGroupProvider.value)}失败`;
                         }
                     } catch (e) {
                         console.error(e);
-                        securityGroupError.value = '删除规则失败，请检查网络连接';
+                        securityGroupError.value = `删除${getSecurityRuleLabel(currentSecurityGroupProvider.value)}失败，请检查网络连接`;
                     } finally {
                         securityGroupDeletingKey.value = '';
                     }
@@ -2300,6 +2407,7 @@
                         securityGroupId: '',
                         remark: '',
                         siteType: 'china',
+                        extraConfig: defaultExtraConfig(),
                         apiProxy: { enabled: false, host: '', port: '', username: '', password: '' },
                         schedule: { enabled: false, startTime: '', stopTime: '' }
                     });
@@ -2326,13 +2434,14 @@
                     showChartModal, chartLoading, chartMode, currentChartAccount, openChart, closeChart, switchChartMode, isChartEmpty,
                     showSecurityGroupModal, securityGroupLoading, securityGroupSubmitting, securityGroupDeletingKey, securityGroupError,
                     currentSecurityGroupAccount, currentSecurityGroupInstanceId, currentSecurityGroupInstanceName, currentSecurityGroupRegion, currentSecurityGroupPublicIp,
-                    currentSecurityGroupDiscoveryStatus, currentSecurityGroupDiscoveryMode, currentSecurityGroupDiscoveryMessage, currentSecurityGroupFallback,
+                    currentSecurityGroupProvider, currentSecurityGroupDiscoveryStatus, currentSecurityGroupDiscoveryMode, currentSecurityGroupDiscoveryMessage, currentSecurityGroupFallback,
                     securityGroups, securityGroupForm,
                     openSecurityGroupModal, closeSecurityGroupModal, applySecurityGroupPreset, submitSecurityGroupRule, removeSecurityGroupRule, syncSecurityGroupPortRange,
                     itemSupports, accountSupports, anyAccountSupports, syncAccountCapabilities, getProviderLabel, getTrafficLabel, getProviderBadgeClass,
                     canShowChart,
                     shouldUsePrimaryMetricCard, getPrimaryMetricValue, getPrimaryMetricUnit, getPrimaryMetricLabel, getPrimaryMetricSummary,
                     getHuaweiInstanceTitle, getHuaweiDiscoveryLabel, getHuaweiDiscoveryBadgeClass, getCardIndicatorClass,
+                    isInstanceOpsProvider, getSecurityRuleLabel, getInstancePlaceholder,
                     applySuggestedInstanceId,
                     getRegionSuggestions, shouldShowRegionDropdown, handleRegionFocus, handleRegionBlur, getRegionPlaceholder,
                     isOperatingMap,
