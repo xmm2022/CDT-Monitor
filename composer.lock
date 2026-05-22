@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "63b8f3538fb12824bee6514c1716db59",
+    "content-hash": "1284802c27c0fda1d819c4f8ca41c5f9",
     "packages": [
         {
             "name": "adbario/php-dot-notation",
@@ -2560,6 +2560,55 @@
                 "source": "https://github.com/tencentcloud-sdk-php/cvm/tree/3.0.1330"
             },
             "time": "2025-03-03T20:33:02+00:00"
+        },
+        {
+            "name": "tencentcloud/vpc",
+            "version": "3.0.1330",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/tencentcloud-sdk-php/vpc.git",
+                "reference": "c4204867174f0bd2de6f2714dc9f690b786bc552"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/tencentcloud-sdk-php/vpc/zipball/c4204867174f0bd2de6f2714dc9f690b786bc552",
+                "reference": "c4204867174f0bd2de6f2714dc9f690b786bc552",
+                "shasum": "",
+                "mirrors": [
+                    {
+                        "url": "https://mirrors.aliyun.com/composer/dists/%package%/%reference%.%type%",
+                        "preferred": true
+                    }
+                ]
+            },
+            "require": {
+                "tencentcloud/common": "3.0.1330"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "TencentCloud\\": "./src/TencentCloud"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "Apache-2.0"
+            ],
+            "authors": [
+                {
+                    "name": "tencentcloudapi",
+                    "email": "tencentcloudapi@tencent.com",
+                    "homepage": "https://github.com/tencentcloud-sdk-php/vpc",
+                    "role": "Developer"
+                }
+            ],
+            "description": "TencentCloudApi php sdk vpc",
+            "homepage": "https://github.com/tencentcloud-sdk-php/vpc",
+            "support": {
+                "issues": "https://github.com/tencentcloud-sdk-php/vpc/issues",
+                "source": "https://github.com/tencentcloud-sdk-php/vpc/tree/3.0.1330"
+            },
+            "time": "2025-03-03T21:32:32+00:00"
         }
     ],
     "packages-dev": [],

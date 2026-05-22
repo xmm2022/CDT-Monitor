@@ -5,7 +5,8 @@
         "huaweicloud/huaweicloud-sdk-php": "^3.1",
         "tencentcloud/cvm": "^3.0",
         "aws/aws-sdk-php": "^3.337",
-        "google/cloud-compute": "^1.18"
+        "google/cloud-compute": "^1.18",
+        "tencentcloud/vpc": "^3.0"
     },
     "repositories": {
         "packagist": {
