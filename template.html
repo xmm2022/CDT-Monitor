@@ -4,8 +4,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>阿里云 CDT 监控控制台</title>
-    <meta name="description" content="阿里云 CDT 流量监控控制台，实时监控 ECS 实例流量使用情况，支持自动告警与定时开关机。">
+    <title>CDT Monitor 多云实例监控控制台</title>
+    <meta name="description" content="CDT Monitor 多云实例监控控制台，支持实例状态、安全组、流量与告警管理。">
     <!-- 引用 Favicon 图标 -->
     <link rel="icon" type="image/png" href="icon.png">
     <!-- 预编译的 Tailwind CSS v4 -->
@@ -647,7 +647,7 @@
                                 <input v-model="config.admin_password" type="text"
                                     class="w-full glass-input rounded-xl px-4 py-2 text-sm">
                             </div>
-                            <div class="space-y-1">
+                            <div v-if="anyAccountSupports('traffic_monitor')" class="space-y-1">
                                 <label class="text-xs font-medium text-gray-500 ml-2">告警阈值 (%)</label>
                                 <input v-model.number="config.traffic_threshold" type="number" min="1" max="100"
                                     class="w-full glass-input rounded-xl px-4 py-2 text-sm">
@@ -668,7 +668,7 @@
 
                             <div v-if="anyAccountSupports('stop_charging')" class="space-y-1 relative">
                                 <div class="flex items-center gap-1">
-                                    <label class="text-xs font-medium text-gray-500 ml-2">停机模式</label>
+                                    <label class="text-xs font-medium text-gray-500 ml-2">阿里云停机模式</label>
                                     <div class="group relative flex items-center">
                                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
                                             stroke-width="1.5" stroke="currentColor"
@@ -682,12 +682,12 @@
                                                 <div>
                                                     <h4 class="text-orange-400 font-bold mb-1">普通停机模式 (KeepCharging)
                                                     </h4>
-                                                    <p class="text-gray-300">停止实例后保留实例的资源并继续收费。</p>
+                                                    <p class="text-gray-300">阿里云实例停止后保留实例资源并继续收费。</p>
                                                 </div>
                                                 <div class="w-full h-px bg-gray-700/50"></div>
                                                 <div>
                                                     <h4 class="text-green-400 font-bold mb-1">节省停机模式 (StopCharging)</h4>
-                                                    <p class="text-gray-300">计算资源(CPU/内存)、固定公网IP带宽暂停计费。</p>
+                                                    <p class="text-gray-300">阿里云计算资源(CPU/内存)、固定公网 IP 带宽暂停计费。</p>
                                                 </div>
                                             </div>
                                             <div
@@ -714,7 +714,7 @@
 
                             <div v-if="anyAccountSupports('schedule_manage')" class="flex items-center justify-between pt-2">
                                 <div class="flex items-center gap-1">
-                                    <label class="text-xs font-medium text-gray-500 ml-2">实例保活 (抢占式)</label>
+                                    <label class="text-xs font-medium text-gray-500 ml-2">调度保活</label>
                                     <div class="group relative flex items-center">
                                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
                                             stroke-width="1.5" stroke="currentColor"
@@ -724,8 +724,8 @@
                                         </svg>
                                         <div
                                             class="tooltip-content absolute bottom-full mb-2 w-64 md:w-72 p-4 bg-[#1C1C1E]/95 backdrop-blur-md text-white text-xs rounded-2xl shadow-[0_8px_30px_rgba(0,0,0,0.3)] z-50 border border-gray-700 pointer-events-none text-left leading-relaxed">
-                                            <p class="text-gray-300">防止抢占式实例在<span
-                                                    class="text-green-400 font-bold">非关机时间段</span>被意外释放。</p>
+                                            <p class="text-gray-300">仅对支持调度的账号生效；当前主要用于阿里云抢占式实例，防止实例在<span
+                                                    class="text-green-400 font-bold">工作时段</span>处于非预期关机状态。</p>
                                             <div
                                                 class="absolute top-full left-10 md:left-1/2 md:-translate-x-1/2 -mt-2 border-8 border-transparent border-t-[#1C1C1E]/95">
                                             </div>
@@ -743,7 +743,7 @@
                                 </div>
                             </div>
 
-                            <div class="flex items-center justify-between pt-2">
+                            <div v-if="anyAccountSupports('schedule_manage')" class="flex items-center justify-between pt-2">
                                 <label class="text-xs font-medium text-gray-500 ml-2">定时任务邮件通知</label>
                                 <div class="relative inline-block w-10 mr-2">
                                     <input type="checkbox" v-model="config.enable_schedule_email" id="toggle-sched"
@@ -758,7 +758,7 @@
 
                             <div v-if="anyAccountSupports('billing_summary')" class="flex items-center justify-between pt-2">
                                 <div class="flex items-center gap-1">
-                                    <label class="text-xs font-medium text-gray-500 ml-2">成本分析 (BSS)</label>
+                                    <label class="text-xs font-medium text-gray-500 ml-2">阿里云成本分析 (BSS)</label>
                                     <div class="group relative flex items-center">
                                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
                                             stroke-width="1.5" stroke="currentColor"
@@ -1099,7 +1099,7 @@
                                             华为云请直接填写官方 Region ID，例如 `ap-southeast-3`、`cn-north-4`。
                                         </p>
                                     </div>
-                                    <div v-if="accountSupports(acc, 'traffic_monitor') || acc.cloudProvider === 'huaweicloud'" class="space-y-1">
+                                    <div v-if="accountSupports(acc, 'traffic_monitor')" class="space-y-1">
                                         <label class="text-xs font-medium text-gray-500 ml-2">Max Traffic (GB)</label>
                                         <input v-model.number="acc.maxTraffic" type="number"
                                             class="w-full glass-input rounded-xl px-4 py-2 text-sm">
@@ -1511,9 +1511,9 @@
                         region_picker: true
                     },
                     huaweicloud: {
-                        traffic_monitor: false,
+                        traffic_monitor: true,
                         security_group_manage: true,
-                        instance_start_stop: false,
+                        instance_start_stop: true,
                         stop_charging: false,
                         billing_summary: false,
                         schedule_manage: false,
