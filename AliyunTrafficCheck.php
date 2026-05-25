@@ -504,6 +504,11 @@ class AliyunTrafficCheck
             $capabilities = $provider->getCapabilities($account);
 
             if ($this->providerSupportsInstanceContext($provider, $account)) {
+                if (!$this->shouldRefreshAccountStatus($account, $currentTime, $userInterval)) {
+                    $data[] = $this->buildCachedFrontendStatusItem($account, $capabilities, $threshold, $currentTime);
+                    continue;
+                }
+
                 $context = $this->safeDescribeAccountContext($provider, $account);
                 $traffic = $context['trafficDataAvailable']
                     ? (float) ($context['trafficUsedGb'] ?? 0)
@@ -515,29 +520,7 @@ class AliyunTrafficCheck
                     $this->db->addDailyStat($account['id'], $traffic);
                 }
 
-                $maxTraffic = (float) ($account['max_traffic'] ?? 0);
-                $usagePercent = ($maxTraffic > 0 && !empty($context['trafficDataAvailable']))
-                    ? round(($traffic / $maxTraffic) * 100, 2)
-                    : 0;
-
-                $item = [
-                    'id' => $account['id'],
-                    'cloudProvider' => $account['cloud_provider'] ?? 'aliyun',
-                    'capabilities' => $capabilities,
-                    'account' => substr($account['access_key_id'], 0, 7) . '***',
-                    'projectId' => $account['project_id'] ?? '',
-                    'securityGroupId' => $account['security_group_id'] ?? '',
-                    'flow_total' => $maxTraffic,
-                    'flow_used' => round($traffic, 2),
-                    'percentageOfUse' => $usagePercent,
-                    'region' => $account['region_id'],
-                    'regionName' => $this->getRegionName($account['region_id']),
-                    'rate95' => ($maxTraffic > 0 && $usagePercent >= $threshold),
-                    'threshold' => $threshold,
-                    'instanceStatus' => $status,
-                    'lastUpdated' => date('Y-m-d H:i:s', $currentTime),
-                    'remark' => $account['remark'] ?? ''
-                ];
+                $item = $this->buildBaseFrontendStatusItem($account, $capabilities, $traffic, $status, $currentTime, $threshold);
 
                 $data[] = array_merge($item, $this->buildInstanceContextFrontendItem($account, $context));
                 continue;
@@ -623,6 +606,81 @@ class AliyunTrafficCheck
             'data' => $data,
             'system_last_run' => $this->configManager->getLastRunTime()
         ];
+    }
+
+    private function shouldRefreshAccountStatus(array $account, int $currentTime, int $userInterval): bool
+    {
+        $lastUpdate = (int) ($account['updated_at'] ?? 0);
+        if ($lastUpdate <= 0) {
+            return true;
+        }
+
+        $cachedStatus = $account['instance_status'] ?? 'Unknown';
+        $isTransientState = in_array($cachedStatus, ['Starting', 'Stopping', 'Pending', 'Unknown'], true);
+        $checkInterval = $isTransientState ? 60 : $userInterval;
+
+        return ($currentTime - $lastUpdate) > $checkInterval;
+    }
+
+    private function buildBaseFrontendStatusItem(array $account, array $capabilities, $traffic, $status, int $updatedAt, int $threshold): array
+    {
+        $maxTraffic = (float) ($account['max_traffic'] ?? 0);
+        $traffic = (float) $traffic;
+        $usagePercent = ($maxTraffic > 0) ? round(($traffic / $maxTraffic) * 100, 2) : 0;
+
+        return [
+            'id' => $account['id'],
+            'cloudProvider' => $account['cloud_provider'] ?? 'aliyun',
+            'capabilities' => $capabilities,
+            'account' => substr($account['access_key_id'], 0, 7) . '***',
+            'projectId' => $account['project_id'] ?? '',
+            'securityGroupId' => $account['security_group_id'] ?? '',
+            'flow_total' => $maxTraffic,
+            'flow_used' => round($traffic, 2),
+            'percentageOfUse' => $usagePercent,
+            'region' => $account['region_id'],
+            'regionName' => $this->getRegionName($account['region_id']),
+            'rate95' => ($maxTraffic > 0 && $usagePercent >= $threshold),
+            'threshold' => $threshold,
+            'instanceStatus' => $status ?: 'Unknown',
+            'lastUpdated' => date('Y-m-d H:i:s', $updatedAt > 0 ? $updatedAt : time()),
+            'remark' => $account['remark'] ?? ''
+        ];
+    }
+
+    private function buildCachedFrontendStatusItem(array $account, array $capabilities, int $threshold, int $currentTime): array
+    {
+        $traffic = (float) ($account['traffic_used'] ?? 0);
+        $status = $account['instance_status'] ?: 'Unknown';
+        $updatedAt = (int) ($account['updated_at'] ?? 0);
+
+        $item = $this->buildBaseFrontendStatusItem(
+            $account,
+            $capabilities,
+            $traffic,
+            $status,
+            $updatedAt > 0 ? $updatedAt : $currentTime,
+            $threshold
+        );
+
+        $context = [
+            'instanceId' => $account['instance_id'] ?? '',
+            'instanceName' => '',
+            'publicIp' => '',
+            'securityGroups' => [],
+            'securityGroupCount' => !empty($account['security_group_id']) ? 1 : 0,
+            'securityGroupNames' => [],
+            'discoveryStatus' => !empty($account['instance_id']) ? 'success' : 'incomplete',
+            'discoveryMode' => !empty($account['instance_id']) ? 'cached' : 'security_group_fallback',
+            'discoveryMessage' => '',
+            'usingFallbackSecurityGroup' => false,
+            'fallbackSecurityGroupId' => trim((string) ($account['security_group_id'] ?? '')),
+            'trafficDataAvailable' => !empty($capabilities['traffic_monitor']),
+            'trafficUsedGb' => $traffic,
+            'trafficError' => '',
+        ];
+
+        return array_merge($item, $this->buildInstanceContextFrontendItem($account, $context));
     }
 
     public function refreshAccount($id)
